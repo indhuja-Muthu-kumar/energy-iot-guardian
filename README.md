@@ -237,3 +237,7 @@ server to the internet.
 - The app relies on Flask-Login, CSRF protection, and safe session cookies.
 - The app never claims a device is secure based on no matches alone; it phrases
   results as “No known matches found in the data sources checked at this time.”
+
+# energy-iot-guardian
+
+IoT-based energy monitoring and CVE vulnerability detection.
