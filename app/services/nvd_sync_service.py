@@ -6,6 +6,8 @@ from app.extensions import db
 from app.models.cve import CVE
 from app.services.nvd_client import NVDClient
 
+PAGE_SIZE = 100
+
 
 def _coerce_datetime(value):
     if not isinstance(value, str) or not value:
@@ -18,13 +20,41 @@ def _coerce_datetime(value):
 
 def sync_nvd_catalog(keyword: str, client: NVDClient | None = None) -> int:
     nvd = client or NVDClient()
-    payload = nvd.fetch_cves(keyword, page_size=100, start_index=0)
-    vulnerabilities = payload.get("vulnerabilities") if isinstance(payload, dict) else None
-    if not isinstance(vulnerabilities, list):
-        raise ValueError("NVD response was not a valid vulnerabilities list.")
+    payload = nvd.fetch_cves(keyword, page_size=PAGE_SIZE, start_index=0)
+    if not isinstance(payload, dict):
+        raise ValueError("NVD response was not a JSON object.")
+    vulnerabilities = payload.get("vulnerabilities")
+    total_results = payload.get("totalResults")
+    if (
+        not isinstance(vulnerabilities, list)
+        or not isinstance(total_results, int)
+        or isinstance(total_results, bool)
+        or total_results < 0
+        or len(vulnerabilities) != min(PAGE_SIZE, total_results)
+    ):
+        raise ValueError("NVD response did not contain a complete CVE page.")
+
+    all_vulnerabilities = list(vulnerabilities)
+    while len(all_vulnerabilities) < total_results:
+        start_index = len(all_vulnerabilities)
+        page = nvd.fetch_cves(
+            keyword,
+            page_size=PAGE_SIZE,
+            start_index=start_index,
+        )
+        page_vulnerabilities = page.get("vulnerabilities") if isinstance(page, dict) else None
+        page_total = page.get("totalResults") if isinstance(page, dict) else None
+        expected_page_size = min(PAGE_SIZE, total_results - start_index)
+        if (
+            not isinstance(page_vulnerabilities, list)
+            or page_total != total_results
+            or len(page_vulnerabilities) != expected_page_size
+        ):
+            raise ValueError("NVD response did not contain a complete CVE result page.")
+        all_vulnerabilities.extend(page_vulnerabilities)
 
     saved = 0
-    for item in vulnerabilities:
+    for item in all_vulnerabilities:
         if not isinstance(item, dict):
             continue
         cve_data = item.get("cve")
@@ -85,10 +115,16 @@ def sync_nvd_catalog(keyword: str, client: NVDClient | None = None) -> int:
         record.description = english
         record.published_date = _coerce_datetime(cve_data.get("published"))
         record.last_modified_date = _coerce_datetime(cve_data.get("lastModified"))
-        record.severity = (cvss_entry.get("baseSeverity") if isinstance(cvss_entry, dict) else None) or "unknown"
+        record.severity = (
+            cvss_entry.get("baseSeverity") if isinstance(cvss_entry, dict) else None
+        ) or "unknown"
         record.cvss_score = score
-        record.cvss_vector = cvss_entry.get("vectorString") if isinstance(cvss_entry, dict) else None
-        record.attack_vector = cvss_entry.get("attackVector") if isinstance(cvss_entry, dict) else None
+        record.cvss_vector = (
+            cvss_entry.get("vectorString") if isinstance(cvss_entry, dict) else None
+        )
+        record.attack_vector = (
+            cvss_entry.get("attackVector") if isinstance(cvss_entry, dict) else None
+        )
         record.cwe = cwe
         record.source = "nvd"
         record.raw = cve_data

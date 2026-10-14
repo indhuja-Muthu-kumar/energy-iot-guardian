@@ -23,7 +23,7 @@ class Config:
     KEV_API_URL = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
     TELEMETRY_MQTT_BROKER_HOST = os.getenv(
         "TELEMETRY_MQTT_BROKER_HOST",
-        "broker.emqx.io",
+        "test.mosquitto.org",
     )
     TELEMETRY_MQTT_BROKER_PORT = int(
         os.getenv("TELEMETRY_MQTT_BROKER_PORT", "1883")

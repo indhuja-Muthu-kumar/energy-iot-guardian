@@ -34,6 +34,9 @@ def ensure_telemetry_columns() -> None:
         return
 
     migrations = {
+        "telemetry_readings": {
+            "ingest_source": "VARCHAR(20) NOT NULL DEFAULT 'mqtt'",
+        },
         "scans": {
             "scan_type": "VARCHAR(30) NOT NULL DEFAULT 'device'",
         },

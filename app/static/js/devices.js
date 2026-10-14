@@ -55,6 +55,22 @@ async function saveDevice(form, endpoint, status, action) {
 }
 
 document.addEventListener("DOMContentLoaded", () => {
+  const inventorySearch = document.querySelector("[data-device-search]");
+  if (inventorySearch) {
+    const rows = Array.from(document.querySelectorAll("[data-device-row]"));
+    const empty = document.querySelector("[data-device-empty]");
+    inventorySearch.addEventListener("input", () => {
+      const needle = inventorySearch.value.trim().toLowerCase();
+      let visible = 0;
+      rows.forEach((row) => {
+        const matches = row.dataset.search.includes(needle);
+        row.hidden = !matches;
+        visible += Number(matches);
+      });
+      if (empty) empty.hidden = visible !== 0;
+    });
+  }
+
   const editForm = document.querySelector("[data-device-edit]");
   if (editForm) {
     editForm.addEventListener("submit", (event) => {

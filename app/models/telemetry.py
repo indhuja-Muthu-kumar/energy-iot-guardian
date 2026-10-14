@@ -29,6 +29,12 @@ class TelemetryReading(db.Model):
         nullable=False,
         index=True,
     )
+    ingest_source = db.Column(
+        db.String(20),
+        nullable=False,
+        default="mqtt",
+        server_default="mqtt",
+    )
     telemetry_status = db.Column(db.String(20), nullable=False)
     chip_model = db.Column(db.String(80), nullable=False)
     chip_revision = db.Column(db.Integer, nullable=False)

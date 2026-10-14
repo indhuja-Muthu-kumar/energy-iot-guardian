@@ -81,7 +81,9 @@ def dashboard_telemetry():
     elif now - latest.received_at > timedelta(
         seconds=current_app.config["TELEMETRY_STALE_AFTER_SECONDS"]
     ):
-        state = "stale"
+        state = "demo_stale" if latest.ingest_source == "local_demo" else "stale"
+    elif latest.ingest_source == "local_demo":
+        state = "demo"
     else:
         state = "connected"
 
@@ -104,6 +106,7 @@ def dashboard_telemetry():
                 "power": latest.power,
                 "timestamp": iso_utc(latest.timestamp),
                 "received_at": iso_utc(latest.received_at),
+                "ingest_source": latest.ingest_source,
                 "telemetry_status": latest.telemetry_status,
             },
             "history": [

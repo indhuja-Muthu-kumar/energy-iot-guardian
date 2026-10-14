@@ -2,7 +2,7 @@
 {% block content %}
   {% set firmware_value = device.firmware_version if device.firmware_version is not none else device.firmware %}
   <div class="page-heading">
-    <div><p class="section-kicker">DEVICE PROFILE · ASSET #{{ device.id }}</p><h1 class="page-title">{{ device.name }}</h1><p class="page-description">Review inventory details and recent scan history.</p></div>
+    <div><p class="section-kicker">DEVICE PROFILE · ASSET #{{ device.id }}</p><h1 class="page-title">{{ device.name }}</h1><p class="page-description">Review device identity, assessment evidence, telemetry, alerts, and remediation records.</p></div>
     {% if device.status == 'archived' %}
       <span class="status-pill">Archived · history preserved</span>
     {% else %}
@@ -68,6 +68,49 @@
     {% else %}
       <p class="empty-state">No scans have been run for this device yet.</p>
     {% endif %}
+  </section>
+  <section class="card" aria-labelledby="device-findings-title">
+    <div class="panel-header"><div><h2 id="device-findings-title">Assessment evidence</h2><p>Recorded scan findings; potential matches are not confirmed affected versions.</p></div></div>
+    {% if findings %}
+      <div class="table-scroll"><table class="table responsive-table">
+        <thead><tr><th>CVE</th><th>Severity</th><th>Assessment / confidence</th><th>Component / version</th><th>Evidence</th></tr></thead>
+        <tbody>{% for finding in findings %}
+          <tr>
+            <td data-label="CVE"><a href="{{ url_for('pages.cve_detail', cve_id=finding.cve_id) }}">{{ finding.cve_id }}</a></td>
+            <td data-label="Severity"><span class="severity-badge {{ finding.severity|lower }}">{{ finding.severity|title }}</span></td>
+            <td data-label="Assessment / confidence"><span class="assessment-tag {{ finding.match_status }}">{{ finding.match_status|replace('_', ' ')|title }}</span><small>{{ finding.confidence|title }} confidence · {{ finding.matched_by or 'Source not recorded' }}</small></td>
+            <td data-label="Component / version">{{ finding.component_name or 'Not identified' }}<small>{{ finding.component_version or 'Version unknown' }}</small></td>
+            <td data-label="Evidence">{{ finding.evidence or finding.summary or 'No evidence stored.' }}</td>
+          </tr>
+        {% endfor %}</tbody>
+      </table></div>
+    {% else %}<p class="empty-state">No CVE findings are recorded for this device.</p>{% endif %}
+  </section>
+  <section class="grid grid-3 device-activity" aria-label="Telemetry and security activity">
+    <article class="card">
+      <h2>Recent telemetry</h2>
+      {% if telemetry %}
+        <p class="telemetry-disclaimer">Values are simulated; they do not prove physical inverter operation.</p>
+        <div class="table-scroll"><table class="table"><thead><tr><th>Received</th><th>Voltage</th><th>Current</th><th>Power</th><th>Source</th></tr></thead><tbody>
+          {% for reading in telemetry %}
+            <tr><td>{{ reading.received_at.strftime('%Y-%m-%d %H:%M:%S') }} UTC</td><td>{{ '%.1f'|format(reading.voltage) }} V</td><td>{{ '%.1f'|format(reading.current) }} A</td><td>{{ '%.1f'|format(reading.power) }} W</td><td>{{ reading.ingest_source|replace('_', ' ')|title }} · {{ reading.telemetry_status }}</td></tr>
+          {% endfor %}
+        </tbody></table></div>
+      {% else %}<p class="empty-state">No telemetry messages are stored for this device.</p>{% endif %}
+    </article>
+    <article class="card">
+      <h2>Security alerts</h2>
+      {% if alerts %}
+        <ul class="detail-list">{% for alert in alerts %}<li><span class="severity-badge {{ alert.severity|lower }}">{{ alert.severity|title }}</span><strong>{{ alert.title }}</strong><small>{{ alert.status|title }}{% if alert.cve_id %} · <a href="{{ url_for('pages.cve_detail', cve_id=alert.cve_id) }}">{{ alert.cve_id }}</a>{% endif %}</small></li>{% endfor %}</ul>
+      {% else %}<p class="empty-state">No alerts recorded.</p>{% endif %}
+    </article>
+    <article class="card">
+      <h2>Remediation records</h2>
+      {% if remediation_items %}
+        <ul class="detail-list">{% for item in remediation_items %}<li><strong>{{ item.component_name }}</strong><small>{{ item.cve_id or 'No CVE linked' }} · {{ 'SIMULATED' if item.is_simulated else item.status|title }} · {{ item.status|title }}</small><small>{{ item.recommended_version or 'No verified fixed version' }}</small></li>{% endfor %}</ul>
+        <a class="text-link" href="{{ url_for('pages.remediation') }}">Open remediation center →</a>
+      {% else %}<p class="empty-state">No remediation records stored.</p>{% endif %}
+    </article>
   </section>
   <script type="module" src="{{ url_for('static', filename='js/devices.js') }}"></script>
 {% endblock %}

@@ -130,9 +130,15 @@ function startDeviceTelemetry() {
     const stateText = {
       connected: "Connected · SIMULATED",
       stale: "Stale · SIMULATED",
+      demo: "Local demo · simulated",
+      demo_stale: "Local demo · stale · simulated",
       archived: "Archived · history only",
     };
     displayText("[data-telemetry-status]", stateText[data.state] || "Unknown");
+    const sourceElement = panel.querySelector("[data-telemetry-source]");
+    sourceElement.textContent = data.latest.ingest_source === "local_demo"
+      ? "LOCAL DEMO · NOT LIVE"
+      : "SIMULATED · MQTT";
     const received = new Date(latest.received_at);
     const receivedElement = panel.querySelector("[data-telemetry-received]");
     receivedElement.dateTime = received.toISOString();

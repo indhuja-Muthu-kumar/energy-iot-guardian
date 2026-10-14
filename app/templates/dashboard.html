@@ -4,7 +4,7 @@
 {% block extra_css %}<link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">{% endblock %}
 {% block content %}
   {% set severity = vulnerability_summary.severity %}
-  {% set potential_total = severity.critical.potential + severity.high.potential + severity.medium.potential + severity.low.potential %}
+  {% set potential_total = severity.critical.potential + severity.high.potential + severity.medium.potential + severity.low.potential + vulnerability_summary.unknown_severity.potential %}
   <div class="dashboard-shell" data-dashboard>
     <aside class="dashboard-sidebar" aria-label="Main navigation">
       <a class="dashboard-brand" href="{{ url_for('pages.dashboard') }}">
@@ -17,9 +17,12 @@
       <nav class="dashboard-nav">
         <a class="active" href="{{ url_for('pages.dashboard') }}" aria-current="page"><span aria-hidden="true">⌂</span>Dashboard</a>
         <a href="{{ url_for('pages.devices') }}"><span aria-hidden="true">▣</span>Devices</a>
+        <a href="{{ url_for('pages.cves') }}"><span aria-hidden="true">⛨</span>Vulnerability Intel</a>
+        <a href="{{ url_for('pages.alerts') }}"><span aria-hidden="true">!</span>Security Alerts</a>
+        <a href="{{ url_for('pages.remediation') }}"><span aria-hidden="true">↻</span>Remediation</a>
+        <a href="#telemetry"><span aria-hidden="true">⌁</span>Telemetry monitor</a>
         <a href="{{ url_for('pages.scans') }}"><span aria-hidden="true">⌕</span>Scans</a>
         <a href="{{ url_for('pages.reports') }}"><span aria-hidden="true">▤</span>Reports</a>
-        <a href="{{ url_for('pages.cves') }}"><span aria-hidden="true">⛨</span>CVE Database</a>
         <a href="{{ url_for('pages.settings') }}"><span aria-hidden="true">⚙</span>Settings</a>
       </nav>
 
@@ -40,9 +43,9 @@
           <p>Here is the latest activity across your Energy-IoT devices.</p>
         </div>
         <div class="topbar-actions">
-          <a class="notification-link" href="#recent-alerts" aria-label="Recent scan activity">
+          <a class="notification-link" href="{{ url_for('pages.alerts') }}" aria-label="Open security alerts">
             <span aria-hidden="true"><svg viewBox="0 0 20 20"><path d="M15.5 8a5.5 5.5 0 0 0-11 0c0 6-2 6-2 7.5h15C17.5 14 15.5 14 15.5 8ZM8 18h4"/></svg></span>
-            {% if dashboard_panels.recent_scans %}<b>{{ dashboard_panels.recent_scans|length }}</b>{% endif %}
+            {% if dashboard_panels.open_alert_count %}<b>{{ dashboard_panels.open_alert_count }}</b>{% endif %}
           </a>
           <span class="profile-avatar" aria-hidden="true">{{ current_user.username[:1]|upper }}</span>
           <span class="profile-name">{{ current_user.username|e }}</span>
@@ -54,6 +57,22 @@
       </header>
 
       <section class="dashboard-content" aria-label="Dashboard overview">
+        <section class="ops-metrics" aria-label="Security operations summary">
+          <a class="ops-metric" href="{{ url_for('pages.devices') }}"><span>Registered devices</span><strong>{{ wallet.devices }}</strong><small>Inventory records</small></a>
+          <a class="ops-metric" href="{{ url_for('pages.cves') }}"><span>Stored CVEs</span><strong>{{ cve_count }}</strong><small>Local NVD catalog</small></a>
+          <a class="ops-metric" href="{{ url_for('pages.devices') }}"><span>Confirmed device/CVE pairs</span><strong>{{ confirmed_device_cves }}</strong><small>Version applicability evaluated</small></a>
+          <a class="ops-metric" href="{{ url_for('pages.cves', assessment='potential') }}"><span>Potential matches</span><strong>{{ potential_total }}</strong><small>Require verification</small></a>
+          <a class="ops-metric" href="{{ url_for('pages.alerts') }}"><span>Open alerts</span><strong>{{ dashboard_panels.open_alert_count }}</strong><small>Unacknowledged</small></a>
+          <a class="ops-metric" href="{{ url_for('pages.remediation') }}"><span>Awaiting review</span><strong>{{ dashboard_panels.pending_patch_count }}</strong><small>Includes simulated workflow items</small></a>
+        </section>
+        <p class="ops-sync-state">
+          NVD sync:
+          {% if dashboard_panels.latest_nvd_sync and dashboard_panels.latest_nvd_sync.completed_at %}
+            last successful run {{ dashboard_panels.latest_nvd_sync.completed_at.strftime('%Y-%m-%d %H:%M UTC') }} ({{ dashboard_panels.latest_nvd_sync.records_processed }} records)
+          {% else %}
+            no successful NVD sync recorded
+          {% endif %}
+        </p>
         <section class="severity-grid" aria-label="Latest per-device severity totals">
           {% for level, color, icon in (('critical', 'critical', '◆'), ('high', 'high', '▲'), ('medium', 'medium', '●'), ('low', 'low', '━')) %}
             <article class="severity-card {{ color }}">
@@ -84,7 +103,7 @@
             </div>
             <div class="trend-chart-wrap">
               <svg class="trend-chart" viewBox="0 0 700 190" role="img" aria-label="Potential finding counts for recent completed scans" data-trend-chart data-trend-points='{{ dashboard_panels.trend_points|tojson|forceescape }}'>
-                <defs><linearGradient id="trend-fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stop-color="#ff344a" stop-opacity=".36"/><stop offset="100%" stop-color="#ff344a" stop-opacity="0"/></linearGradient></defs>
+                <defs><linearGradient id="trend-fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stop-color="#36c6ba" stop-opacity=".24"/><stop offset="100%" stop-color="#36c6ba" stop-opacity="0"/></linearGradient></defs>
                 <g class="chart-grid">
                   <line x1="38" y1="20" x2="690" y2="20"/><line x1="38" y1="60" x2="690" y2="60"/>
                   <line x1="38" y1="100" x2="690" y2="100"/><line x1="38" y1="140" x2="690" y2="140"/>
@@ -144,16 +163,16 @@
           </article>
         </section>
 
-        <section class="dashboard-panel telemetry-panel" aria-labelledby="telemetry-title" data-device-telemetry data-telemetry-url="{{ url_for('api_dashboard.dashboard_telemetry') }}">
+        <section class="dashboard-panel telemetry-panel" id="telemetry" aria-labelledby="telemetry-title" data-device-telemetry data-telemetry-url="{{ url_for('api_dashboard.dashboard_telemetry') }}">
           <div class="panel-heading">
             <div>
               <h2 id="telemetry-title">Simulated solar telemetry</h2>
               <p>SolarGuard-01 · SMA Solar Technology · Sunny Boy TL-21</p>
             </div>
-            <span class="simulation-badge">SIMULATED · WOKWI DEVICE</span>
+            <span class="simulation-badge" data-telemetry-source>SIMULATED TELEMETRY</span>
           </div>
           <p class="telemetry-disclaimer">
-            Readings come from the Wokwi ESP32 simulation through MQTT. Solar asset labels are descriptive metadata, not verified SMA hardware measurements or inverter firmware.
+            All readings are simulated. MQTT readings originate from the Wokwi ESP32; the local demo uses fixed synthetic values and makes no broker or hardware connection. Solar asset labels are not verified SMA measurements or inverter firmware.
           </p>
           <div class="telemetry-metrics" aria-live="polite">
             <article class="telemetry-metric">
@@ -259,19 +278,18 @@
                 <div><h2>Recent alerts</h2><p>Latest scan status updates</p></div>
                 <a class="text-link" href="{{ url_for('pages.scans') }}">View all <span aria-hidden="true">→</span></a>
               </div>
-              {% if dashboard_panels.recent_scans %}
+              {% if dashboard_panels.recent_alerts %}
                 <ul class="alert-list">
-                  {% for item in dashboard_panels.recent_scans[:4] %}
-                    {% set scan = item.scan %}
-                    <li>
-                      <span class="alert-icon {{ scan.status|lower }}" aria-hidden="true">{% if scan.status == 'completed' %}✓{% elif scan.status == 'failed' %}!{% else %}…{% endif %}</span>
-                      <a href="{{ url_for('pages.scan_detail', scan_id=scan.id) }}"><strong>Scan #{{ scan.id }} {{ scan.status|lower }}</strong><small>{{ item.potential_findings }} potential finding{% if item.potential_findings != 1 %}s{% endif %}{% if scan.device %} · {{ scan.device.name }}{% endif %}</small></a>
-                      <time>{{ (scan.completed_at or scan.created_at).strftime('%m-%d %H:%M') if scan.completed_at or scan.created_at else '—' }}</time>
-                    </li>
-                  {% endfor %}
-                </ul>
-              {% else %}
-                <p class="empty-state">No scan activity to report.</p>
+                    {% for alert in dashboard_panels.recent_alerts %}
+                      <li>
+                        <span class="alert-icon {{ alert.severity|lower }}" aria-hidden="true">{% if alert.severity|lower in ('critical', 'high') %}!{% else %}•{% endif %}</span>
+                        <a href="{{ url_for('pages.alerts') }}"><strong>{{ alert.title }}</strong><small>{{ alert.severity|title }} · {{ alert.status|title }} · {{ alert.device.name if alert.device else 'Unknown device' }}{% if alert.cve_id %} · {{ alert.cve_id }}{% endif %}</small></a>
+                        <time>{{ alert.created_at.strftime('%m-%d %H:%M') if alert.created_at else '—' }}</time>
+                      </li>
+                    {% endfor %}
+                  </ul>
+                {% else %}
+                  <p class="empty-state">No security alerts are recorded.</p>
               {% endif %}
             </article>
           </div>

@@ -5,6 +5,7 @@ import logging
 import math
 import re
 from datetime import UTC, datetime, timedelta
+from secrets import token_hex
 
 from flask import current_app
 from sqlalchemy.exc import IntegrityError
@@ -128,9 +129,16 @@ def validate_telemetry_payload(raw: bytes | str, received_at: datetime) -> dict:
     }
 
 
-def ingest_telemetry_message(topic: str, raw: bytes | str) -> bool:
+def ingest_telemetry_message(
+    topic: str,
+    raw: bytes | str,
+    *,
+    ingest_source: str = "mqtt",
+) -> bool:
     if topic != current_app.config["TELEMETRY_MQTT_TOPIC"]:
         raise TelemetryValidationError("Unexpected MQTT topic.")
+    if ingest_source not in {"mqtt", "local_demo"}:
+        raise ValueError("ingest_source must be 'mqtt' or 'local_demo'.")
     received_at = datetime.now(UTC)
     payload = validate_telemetry_payload(raw, received_at)
 
@@ -159,6 +167,7 @@ def ingest_telemetry_message(topic: str, raw: bytes | str) -> bool:
         power=payload["power"],
         timestamp=payload["timestamp"],
         received_at=payload["received_at"],
+        ingest_source=ingest_source,
         telemetry_status=payload["telemetry_status"],
         chip_model=payload["chip_model"],
         chip_revision=payload["chip_revision"],
@@ -177,3 +186,28 @@ def ingest_telemetry_message(topic: str, raw: bytes | str) -> bool:
             return False
         raise
     return True
+
+
+def create_local_demo_reading() -> bool:
+    """Store one explicitly local simulated reading without using MQTT."""
+    timestamp = datetime.now(UTC).replace(microsecond=0)
+    payload = {
+        "message_id": f"local-{token_hex(12)}",
+        "device_id": current_app.config["TELEMETRY_DEVICE_ID"],
+        "manufacturer": current_app.config["TELEMETRY_DEVICE_VENDOR"],
+        "model": current_app.config["TELEMETRY_DEVICE_MODEL"],
+        "voltage": 230.0,
+        "current": 4.0,
+        "power": 920.0,
+        "timestamp": timestamp.isoformat(),
+        "telemetry_status": "SIMULATED",
+        "chip_model": "LOCAL-DEMO",
+        "chip_revision": 0,
+        "arduino_core_version": "not reported",
+        "esp_idf_version": "not reported",
+    }
+    return ingest_telemetry_message(
+        current_app.config["TELEMETRY_MQTT_TOPIC"],
+        json.dumps(payload),
+        ingest_source="local_demo",
+    )

@@ -28,7 +28,9 @@
           <a class="{{ 'active' if request.endpoint == 'pages.dashboard' else '' }}" href="{{ url_for('pages.dashboard') }}"><span aria-hidden="true">⌂</span>Dashboard</a>
           <a class="{{ 'active' if request.endpoint in ('pages.devices', 'pages.device_detail') else '' }}" href="{{ url_for('pages.devices') }}"><span aria-hidden="true">▣</span>Devices</a>
           <a class="{{ 'active' if request.endpoint in ('pages.scans', 'pages.scan_new', 'pages.scan_detail') else '' }}" href="{{ url_for('pages.scans') }}"><span aria-hidden="true">⌕</span>Scans</a>
-          <a class="{{ 'active' if request.endpoint in ('pages.cves', 'pages.cve_detail') else '' }}" href="{{ url_for('pages.cves') }}"><span aria-hidden="true">⛨</span>CVE Database</a>
+          <a class="{{ 'active' if request.endpoint in ('pages.cves', 'pages.cve_detail') else '' }}" href="{{ url_for('pages.cves') }}"><span aria-hidden="true">⛨</span>Vulnerability Intelligence</a>
+          <a class="{{ 'active' if request.endpoint in ('pages.alerts', 'pages.toggle_alert_acknowledgement') else '' }}" href="{{ url_for('pages.alerts') }}"><span aria-hidden="true">!</span>Security Alerts</a>
+          <a class="{{ 'active' if request.endpoint in ('pages.remediation', 'pages.approve_simulated_patch', 'pages.verify_simulated_patch') else '' }}" href="{{ url_for('pages.remediation') }}"><span aria-hidden="true">↻</span>Remediation Center</a>
           <a class="{{ 'active' if request.endpoint == 'pages.reports' else '' }}" href="{{ url_for('pages.reports') }}"><span aria-hidden="true">▤</span>Reports</a>
           <a class="{{ 'active' if request.endpoint in ('pages.settings', 'pages.admin_users') else '' }}" href="{{ url_for('pages.settings') }}"><span aria-hidden="true">⚙</span>Settings</a>
           {% if current_user.is_admin %}

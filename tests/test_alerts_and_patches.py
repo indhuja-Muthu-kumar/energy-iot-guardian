@@ -40,6 +40,7 @@ def make_app():
 class FakeNVDClient:
     def fetch_cves(self, keyword, page_size=10, start_index=0):
         return {
+            "totalResults": 2,
             "vulnerabilities": [
                 {
                     "cve": {
@@ -59,9 +60,7 @@ class FakeNVDClient:
                                 }
                             ]
                         },
-                        "weaknesses": [
-                            {"description": [{"value": "CWE-79"}]}
-                        ],
+                        "weaknesses": [{"description": [{"value": "CWE-79"}]}],
                     }
                 },
                 {
@@ -82,12 +81,10 @@ class FakeNVDClient:
                                 }
                             ]
                         },
-                        "weaknesses": [
-                            {"description": [{"value": "CWE-89"}]}
-                        ],
+                        "weaknesses": [{"description": [{"value": "CWE-89"}]}],
                     }
                 },
-            ]
+            ],
         }
 
 
@@ -98,6 +95,35 @@ def test_nvd_sync_catalog_persists_and_deduplicates_cves():
         assert count == 2
         assert CVE.query.count() == 2
         assert CVE.query.get("CVE-2025-1001").severity == "CRITICAL"
+
+
+def test_nvd_sync_fetches_all_complete_result_pages():
+    app, _device_id = make_app()
+
+    class PagedNVDClient:
+        def __init__(self):
+            self.start_indices = []
+
+        def fetch_cves(self, keyword, page_size=10, start_index=0):
+            assert keyword == "Example runtime"
+            assert page_size == 100
+            self.start_indices.append(start_index)
+            total = 102
+            count = min(page_size, total - start_index)
+            return {
+                "totalResults": total,
+                "vulnerabilities": [
+                    {"cve": {"id": f"CVE-2025-{10000 + index}"}}
+                    for index in range(start_index, start_index + count)
+                ],
+            }
+
+    client = PagedNVDClient()
+    with app.app_context():
+        count = sync_nvd_catalog("Example runtime", client=client)
+        assert count == 102
+        assert client.start_indices == [0, 100]
+        assert CVE.query.count() == 102
 
 
 def test_alerts_are_deduplicated_for_repeated_findings():

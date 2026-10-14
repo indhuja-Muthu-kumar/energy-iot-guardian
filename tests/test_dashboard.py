@@ -311,8 +311,10 @@ def test_dashboard_includes_clearly_labeled_simulated_telemetry():
     assert "SMA Solar Technology" in html
     assert "Sunny Boy TL-21" in html
     assert "SIMULATED" in html
-    assert "Readings come from the Wokwi ESP32 simulation through MQTT" in html
-    assert "not verified SMA hardware measurements or inverter firmware" in html
+    assert "MQTT readings originate from the Wokwi ESP32" in html
+    assert "local demo uses fixed synthetic values" in html
+    assert "not verified SMA measurements or inverter firmware" in html
+    assert "data-telemetry-source" in html
     assert "Voltage" in html
     assert "Current" in html
     assert "Calculated power" in html

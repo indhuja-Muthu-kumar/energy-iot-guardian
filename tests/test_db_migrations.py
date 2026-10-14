@@ -67,7 +67,21 @@ def test_telemetry_migration_adds_columns_idempotently_without_rewriting_rows():
             connection.execute(text("CREATE TABLE scans (id INTEGER PRIMARY KEY)"))
             connection.execute(text("CREATE TABLE findings (id INTEGER PRIMARY KEY)"))
             connection.execute(text("CREATE TABLE cves (id VARCHAR(32) PRIMARY KEY)"))
+            connection.execute(
+                text(
+                    "CREATE TABLE telemetry_readings ("
+                    "id INTEGER PRIMARY KEY, "
+                    "source_message_id VARCHAR(80) NOT NULL"
+                    ")"
+                )
+            )
             connection.execute(text("INSERT INTO scans (id) VALUES (1)"))
+            connection.execute(
+                text(
+                    "INSERT INTO telemetry_readings (id, source_message_id) "
+                    "VALUES (1, 'legacy-reading')"
+                )
+            )
         ensure_telemetry_columns()
         ensure_telemetry_columns()
 
@@ -86,6 +100,16 @@ def test_telemetry_migration_adds_columns_idempotently_without_rewriting_rows():
         assert {
             column["name"] for column in inspect(db.engine).get_columns("cves")
         } >= {"id", "cvss_vector"}
+        assert {
+            column["name"]
+            for column in inspect(db.engine).get_columns("telemetry_readings")
+        } >= {"id", "source_message_id", "ingest_source"}
+        assert db.session.execute(
+            text(
+                "SELECT ingest_source FROM telemetry_readings "
+                "WHERE source_message_id = 'legacy-reading'"
+            )
+        ).scalar_one() == "mqtt"
         assert db.session.execute(text("SELECT id FROM scans")).scalar_one() == 1
 
 

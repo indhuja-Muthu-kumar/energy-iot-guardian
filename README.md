@@ -84,7 +84,7 @@ rows are retained.
 The Wokwi sketch is in the existing `wowki/` directory. Its
 `libraries.txt` installs PubSubClient, and `sketch.ino` publishes simulated
 JSON readings to the configured MQTT topic every three seconds. The default
-broker is `broker.emqx.io`, port `1883`; it is a public, unauthenticated
+broker is `test.mosquitto.org`, port `1883`; it is a public, unauthenticated
 demonstration broker. Do not publish credentials, personal information, or
 other sensitive data to it. Broker hostname, port, topic, and optional
 subscriber credentials/TLS are configurable with `TELEMETRY_MQTT_BROKER_HOST`,
@@ -140,10 +140,39 @@ shows “Waiting for telemetry” before the first message, updates metrics and
 history from database-stored messages, and labels readings “Stale” after ten
 seconds without a new message. The subscriber runs only when explicitly
 started, so Flask's debug reloader and tests do not create duplicate
-subscribers. Device ID, asset labels, and `SIMULATED` status are validated
+subscribers. The default broker and topic now match between the ESP32, Flask
+worker, and standalone listener. The worker logs the subscription request and
+broker acknowledgement; an ESP32 `publish()` success only means its local
+MQTT client accepted the packet and does not prove that a subscriber received
+it. Device ID, asset labels, and `SIMULATED` status are validated
 before storage; duplicate message IDs are ignored. Archived device history
 remains in the database and can still be viewed, but archived devices cannot
 receive live readings or be scanned.
+
+If the public broker or Wokwi is unavailable, create one clearly marked local
+sample using the existing validation and database pipeline:
+
+```powershell
+.\.venv\Scripts\python.exe -m flask --app app telemetry-demo
+```
+
+The dashboard marks this as `LOCAL DEMO · NOT LIVE`; the command contacts no
+MQTT broker or physical device. The sample is intentionally fixed synthetic
+data, not evidence of device connectivity.
+
+Troubleshooting:
+
+- Confirm the ESP32 and subscriber use the same broker host, port, and exact
+  topic. The defaults are `test.mosquitto.org:1883` and
+  `energy-iot-cve-monitor/477780562303197185/SolarGuard-01/telemetry`.
+- Start `telemetry-worker` before the Wokwi simulation. Check its logs for a
+  broker subscription acknowledgement, then check for accepted or rejected
+  telemetry messages.
+- The ESP32 retries failed network connections with a capped backoff. Its
+  local publish-success log is not an end-to-end delivery acknowledgement.
+- Public MQTT service and internet access are external dependencies. Use
+  `telemetry-demo` to present dashboard/database functionality when they are
+  unavailable, and keep the data visibly labeled as local simulation.
 
 The asset vendor/model are descriptive simulation labels, not proof of SMA
 hardware. The reported Arduino ESP32 core and ESP-IDF versions are shown as

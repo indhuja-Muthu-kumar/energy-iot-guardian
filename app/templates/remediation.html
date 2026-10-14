@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}Remediation Center | Energy-IoT Guardian{% endblock %}
+{% block content %}
+  <p class="section-kicker">REMEDIATION TRACKING</p>
+  <div class="page-heading">
+    <div><h1 class="page-title">Patch &amp; remediation center</h1><p class="page-description">Review recorded remediation candidates and their evidence. Approval is not installation; simulated verification is not proof of a fixed device.</p></div>
+  </div>
+  <div class="inline-warning" role="note"><strong>Patch confidence:</strong> Candidate records marked simulated are workflow demonstrations only. They do not contain an official patch recommendation or prove that firmware changed. No simulated candidate is presented as resolved.</div>
+  <section class="card" aria-labelledby="remediation-list-heading">
+    <div class="panel-header"><div><h2 id="remediation-list-heading">Recorded remediation items</h2><p>Source links are displayed only for records explicitly marked non-simulated.</p></div></div>
+    {% if candidates %}
+      <div class="table-scroll">
+        <table class="table responsive-table remediation-table">
+          <thead><tr><th>CVE / device</th><th>Component / version</th><th>Source / patch availability</th><th>Workflow status</th><th>Verification evidence</th><th>Actions</th></tr></thead>
+          <tbody>
+            {% for candidate in candidates %}
+              <tr>
+                <td data-label="CVE / device">
+                  {% if candidate.cve_id %}<a href="{{ url_for('pages.cve_detail', cve_id=candidate.cve_id) }}">{{ candidate.cve_id }}</a>{% else %}<span>No CVE linked</span>{% endif %}
+                  <small>{% if candidate.device %}<a href="{{ url_for('pages.device_detail', device_id=candidate.device.id) }}">{{ candidate.device.name }}</a>{% else %}Unknown device{% endif %}</small>
+                </td>
+                <td data-label="Component / version">{{ candidate.component_name }}<small>Reported: {{ candidate.component_version or 'Unknown' }}</small><small>Suggested: {{ candidate.recommended_version or 'No verified fixed version' }}</small></td>
+                <td data-label="Source / patch availability">
+                  {% if candidate.is_simulated %}
+                    <span class="status-tag status-warning">SIMULATED ONLY</span>
+                    <small>No verified official patch or URL. {{ candidate.patch_source|replace('-', ' ')|title }}</small>
+                  {% elif candidate.patch_url %}
+                    <a href="{{ candidate.patch_url }}" target="_blank" rel="noopener noreferrer">Recorded patch source ↗</a><small>{{ candidate.patch_source }}</small>
+                  {% else %}
+                    <span class="status-tag status-unknown">No verified source</span>
+                  {% endif %}
+                  <small>{{ candidate.evidence }}</small>
+                </td>
+                <td data-label="Workflow status">
+                  {% if candidate.is_simulated %}<span class="status-tag status-warning">Simulated: {{ candidate.status|replace('_', ' ')|title }}</span>
+                  {% else %}<span class="status-tag status-info">{{ candidate.status|replace('_', ' ')|title }}</span>{% endif %}
+                  {% if candidate.approved_at %}<small>Approval recorded {{ candidate.approved_at.strftime('%Y-%m-%d %H:%M UTC') }} by {{ candidate.approved_by or 'unknown' }}</small>{% endif %}
+                  {% if candidate.verified_at %}<small>Workflow verification recorded {{ candidate.verified_at.strftime('%Y-%m-%d %H:%M UTC') }} by {{ candidate.verified_by or 'unknown' }}</small>{% endif %}
+                </td>
+                <td data-label="Verification evidence">
+                  {% if candidate.verification_note %}<small>{{ candidate.verification_note }}</small>{% else %}<span class="muted">No post-update verification evidence recorded.</span>{% endif %}
+                </td>
+                <td data-label="Actions">
+                  {% if current_user.is_admin and candidate.is_simulated and candidate.status == 'discovered' %}
+                    <form method="post" action="{{ url_for('pages.approve_simulated_patch', candidate_id=candidate.id) }}" data-confirm="Record a simulated approval only? No device update will occur.">
+                      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                      <button class="button secondary" type="submit">Simulate approval</button>
+                    </form>
+                  {% elif current_user.is_admin and candidate.is_simulated and candidate.status == 'approved' %}
+                    <form method="post" action="{{ url_for('pages.verify_simulated_patch', candidate_id=candidate.id) }}" data-confirm="Record simulated verification only? This will not confirm firmware was patched.">
+                      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                      <button class="button secondary" type="submit">Record simulated verification</button>
+                    </form>
+                  {% else %}<span class="muted">{% if current_user.is_admin %}No transition available{% else %}Administrator action{% endif %}</span>{% endif %}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="empty-panel"><strong>No remediation items recorded.</strong><p>Items are shown only when a candidate record exists. The application will not invent a vendor patch or fixed version.</p></div>
+    {% endif %}
+  </section>
+{% endblock %}

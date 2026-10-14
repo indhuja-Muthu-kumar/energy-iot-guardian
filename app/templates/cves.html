@@ -1,13 +1,118 @@
 {% extends "base.html" %}
+{% block title %}Vulnerability Intelligence | Energy-IoT Guardian{% endblock %}
 {% block content %}
   <p class="section-kicker">VULNERABILITY INTELLIGENCE</p>
-  <h1 class="page-title">CVE database</h1>
-  <p class="page-description">Search the locally stored NVD CVE records used in scan results.</p>
-  <section class="card cve-search-panel">
-    <label for="cve_search">Search by CVE ID or description</label>
-    <div class="search-field"><span aria-hidden="true">⌕</span><input id="cve_search" type="search" data-cve-search autocomplete="off" placeholder="For example, CVE-2025-1234"></div>
-    <p class="form-hint">Results are loaded from the secured CVE API as you type.</p>
-    <ul data-cve-list class="cve-results" aria-live="polite"><li class="empty-state">Enter a CVE ID or keyword to search.</li></ul>
+  <div class="page-heading">
+    <div><h1 class="page-title">CVE Explorer</h1><p class="page-description">Browse locally stored NVD records and evidence captured by device assessments. A candidate match is not a confirmed vulnerability.</p></div>
+    <span class="status-tag status-info">{{ total_cves }} stored CVE records</span>
+  </div>
+
+  <section class="card sync-panel" aria-labelledby="nvd-sync-title">
+    <div class="panel-header">
+      <div><h2 id="nvd-sync-title">NVD catalog synchronization</h2><p>Fetch CVE records from the NVD API for a focused keyword query.</p></div>
+      {% if latest_sync and latest_sync.completed_at %}
+        <span class="sync-meta">Last successful sync: {{ latest_sync.completed_at.strftime('%Y-%m-%d %H:%M UTC') }} · {{ latest_sync.records_processed }} records</span>
+      {% else %}
+        <span class="sync-meta">No successful sync recorded</span>
+      {% endif %}
+    </div>
+    {% if latest_sync_attempt and latest_sync_attempt.status == 'failed' %}
+      <p class="inline-warning" role="status">The latest sync failed at {{ latest_sync_attempt.completed_at.strftime('%Y-%m-%d %H:%M UTC') if latest_sync_attempt.completed_at else 'an unknown time' }}. Existing catalog data was retained. Check application logs for details.</p>
+    {% endif %}
+    {% if is_admin %}
+      <form method="post" action="{{ url_for('pages.sync_cves') }}" class="sync-form" data-sync-form>
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <label>Search keyword
+          <input name="keyword" required maxlength="120" value="Espressif ESP32" aria-describedby="sync-hint">
+        </label>
+        <button type="submit">Sync CVEs</button>
+        <span id="sync-hint" class="form-hint">NVD connectivity is required. The action runs once and records success or failure.</span>
+        <p data-sync-status role="status" aria-live="polite" hidden></p>
+      </form>
+    {% else %}
+      <p class="form-hint">NVD synchronization is available to administrators.</p>
+    {% endif %}
+  </section>
+
+  <section class="card cve-search-panel" aria-labelledby="cve-filter-title">
+    <div class="panel-header"><div><h2 id="cve-filter-title">Filter CVE records</h2><p>Filters operate on the locally stored catalog and recorded assessments.</p></div></div>
+    <form method="get" action="{{ url_for('pages.cves') }}" class="filter-grid">
+      <label>Search ID or description<input name="q" value="{{ filters.q }}" type="search" placeholder="CVE-2025-1234 or keyword"></label>
+      <label>Severity
+        <select name="severity">
+          <option value="">Any severity</option>
+          {% for level in ('CRITICAL', 'HIGH', 'MEDIUM', 'LOW') %}<option value="{{ level }}" {{ 'selected' if filters.severity == level else '' }}>{{ level|title }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>Device
+        <select name="device">
+          <option value="">Any device</option>
+          {% for device in devices %}<option value="{{ device.id }}" {{ 'selected' if filters.device|string == device.id|string else '' }}>{{ device.name }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>Applicability
+        <select name="assessment">
+          <option value="">Any assessment</option>
+          <option value="confirmed" {{ 'selected' if filters.assessment == 'confirmed' else '' }}>Confirmed version match</option>
+          <option value="potential" {{ 'selected' if filters.assessment == 'potential' else '' }}>Potential / indeterminate</option>
+          <option value="unknown" {{ 'selected' if filters.assessment == 'unknown' else '' }}>Unknown applicability</option>
+        </select>
+      </label>
+      <label>Patch record
+        <select name="patch">
+          <option value="">Any patch state</option>
+          <option value="candidate" {{ 'selected' if filters.patch == 'candidate' else '' }}>Candidate record exists</option>
+          <option value="none" {{ 'selected' if filters.patch == 'none' else '' }}>No candidate record</option>
+        </select>
+      </label>
+      <label>Published from<input name="published_after" type="date" value="{{ filters.published_after }}"></label>
+      <label>Published through<input name="published_before" type="date" value="{{ filters.published_before }}"></label>
+      <div class="filter-actions"><button type="submit">Apply filters</button><a class="button secondary" href="{{ url_for('pages.cves') }}">Clear</a></div>
+    </form>
+  </section>
+
+  <section class="card inventory-table-panel" aria-labelledby="cve-records-title">
+    <div class="panel-header"><div><h2 id="cve-records-title">Stored CVEs</h2><p>Showing up to 100 records. Version applicability is shown only when a scan recorded evidence.</p></div></div>
+    {% if cves %}
+      <div class="table-scroll">
+        <table class="table responsive-table cve-table">
+          <thead><tr><th>CVE / description</th><th>Severity / CVSS</th><th>Published</th><th>Device applicability</th><th>Patch information</th></tr></thead>
+          <tbody>
+            {% for cve in cves %}
+              {% set findings = findings_by_cve.get(cve.id, []) %}
+              {% set ns = namespace(assessment='Unknown applicability', badge='unknown') %}
+              {% if findings %}
+                {% set ns.assessment = 'Not applicable in recorded assessment' %}
+                {% set ns.badge = 'not_applicable' %}
+                {% for finding in findings %}
+                  {% if finding.match_status == 'affected' %}
+                    {% set ns.assessment = 'Confirmed version match' %}
+                    {% set ns.badge = 'affected' %}
+                  {% elif finding.match_status in ('potential', 'indeterminate') and ns.badge != 'affected' %}
+                    {% set ns.assessment = 'Potential / indeterminate' %}
+                    {% set ns.badge = 'potential' %}
+                  {% endif %}
+                {% endfor %}
+              {% endif %}
+              <tr>
+                <td data-label="CVE / description"><a href="{{ url_for('pages.cve_detail', cve_id=cve.id) }}"><strong>{{ cve.id }}</strong></a><small class="cve-description">{{ cve.description or 'No description stored.' }}</small></td>
+                <td data-label="Severity / CVSS"><span class="severity-badge {{ (cve.severity or 'unknown')|lower }}">{{ cve.severity or 'Unknown' }}</span><small>{{ '%.1f'|format(cve.cvss_score) if cve.cvss_score is not none else 'CVSS unavailable' }}</small></td>
+                <td data-label="Published">{{ cve.published_date.strftime('%Y-%m-%d') if cve.published_date else '—' }}</td>
+                <td data-label="Device applicability"><span class="assessment-tag {{ ns.badge }}">{{ ns.assessment }}</span>
+                  {% for finding in findings[:2] %}<small>{{ finding.device.name if finding.device else 'Unknown device' }}{% if finding.component_name %} · {{ finding.component_name }} {{ finding.component_version or '' }}{% endif %}</small>{% endfor %}
+                </td>
+                <td data-label="Patch information">
+                  {% if cve.id in patch_cve_ids %}<span class="status-tag status-warning">Candidate record only</span><small>Verify the source; simulated records are not official patches.</small>
+                  {% else %}<span class="status-tag status-unknown">No verified patch metadata</span>{% endif %}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="empty-panel"><strong>No CVE records match these filters.</strong><p>Clear filters or synchronize the local catalog from NVD. Empty results are not evidence that the device is vulnerability-free.</p></div>
+    {% endif %}
   </section>
   <script type="module" src="{{ url_for('static', filename='js/cves.js') }}"></script>
 {% endblock %}

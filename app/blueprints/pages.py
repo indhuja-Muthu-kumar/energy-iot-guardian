@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import logging
+from datetime import UTC, datetime, timedelta
+from threading import Lock
+
+import requests
 from flask import (
     Blueprint,
     abort,
@@ -7,15 +12,21 @@ from flask import (
     flash,
     redirect,
     render_template,
+    request,
     url_for,
 )
 from flask_login import current_user, login_required
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.extensions import db
+from app.models.alert import SecurityAlert
+from app.models.cve import CVE
 from app.models.device import ARCHIVED_DEVICE_STATUS, Device
 from app.models.finding import Finding
 from app.models.kev import KEVEntry
+from app.models.patch import PatchCandidate
 from app.models.scan import Scan
+from app.models.sync_log import SyncLog
 from app.models.telemetry import TelemetryReading
 from app.models.user import User
 from app.services.dashboard_service import (
@@ -25,6 +36,8 @@ from app.services.dashboard_service import (
 from app.services.component_scan_service import run_component_scan
 
 pages_bp = Blueprint("pages", __name__)
+logger = logging.getLogger(__name__)
+_nvd_sync_lock = Lock()
 
 
 @pages_bp.route("/")
@@ -39,13 +52,24 @@ def dashboard():
     scan_count = db.session.query(Scan).count()
     finding_count = db.session.query(Finding).count()
     kev_count = db.session.query(KEVEntry).count()
-    vulnerability_summary = build_vulnerability_summary(
-        include_device_summaries=True
-    )
+    vulnerability_summary = build_vulnerability_summary(include_device_summaries=True)
     dashboard_panels = build_dashboard_panels()
+    dashboard_panels["recent_alerts"] = (
+        SecurityAlert.query.order_by(SecurityAlert.created_at.desc()).limit(5).all()
+    )
+    dashboard_panels["latest_nvd_sync"] = (
+        SyncLog.query.filter_by(source="nvd", status="success")
+        .order_by(SyncLog.completed_at.desc(), SyncLog.id.desc())
+        .first()
+    )
+    dashboard_panels["open_alert_count"] = SecurityAlert.query.filter_by(status="open").count()
+    dashboard_panels["pending_patch_count"] = PatchCandidate.query.filter(
+        PatchCandidate.status.in_(("discovered", "approved"))
+    ).count()
     dashboard_panels["risk_devices"] = sorted(
         (
-            item for item in vulnerability_summary["device_summaries"].values()
+            item
+            for item in vulnerability_summary["device_summaries"].values()
             if (
                 item["severity"]["critical"]["evaluated"]
                 + item["severity"]["critical"]["potential"]
@@ -71,6 +95,15 @@ def dashboard():
             "kev": kev_count,
         },
         finding_count=finding_count,
+        cve_count=db.session.query(CVE).count(),
+        confirmed_device_cves=sum(
+            bucket["evaluated"]
+            for item in vulnerability_summary["device_summaries"].values()
+            for bucket in (
+                *item["severity"].values(),
+                item["unknown_severity"],
+            )
+        ),
         vulnerability_summary=vulnerability_summary,
         dashboard_panels=dashboard_panels,
     )
@@ -80,13 +113,156 @@ def dashboard():
 @login_required
 def devices():
     items = (
-        Device.query.filter(
-            Device.status.is_distinct_from(ARCHIVED_DEVICE_STATUS)
-        )
+        Device.query.filter(Device.status.is_distinct_from(ARCHIVED_DEVICE_STATUS))
         .order_by(Device.name.asc())
         .all()
     )
-    return render_template("devices.html", devices=items)
+    latest_telemetry = {}
+    latest_findings = {}
+    device_ids = [device.id for device in items]
+    if device_ids:
+        for reading in (
+            TelemetryReading.query.filter(TelemetryReading.device_id.in_(device_ids))
+            .order_by(
+                TelemetryReading.received_at.desc(),
+                TelemetryReading.id.desc(),
+            )
+            .all()
+        ):
+            latest_telemetry.setdefault(reading.device_id, reading)
+        for finding in (
+            Finding.query.join(Scan, Finding.scan_id == Scan.id)
+            .filter(Finding.device_id.in_(device_ids))
+            .order_by(Scan.created_at.desc(), Finding.id.desc())
+            .all()
+        ):
+            latest_findings.setdefault(finding.device_id, finding)
+    return render_template(
+        "devices.html",
+        devices=items,
+        latest_telemetry=latest_telemetry,
+        latest_findings=latest_findings,
+    )
+
+
+@pages_bp.route("/alerts")
+@login_required
+def alerts():
+    query = SecurityAlert.query
+    status_filter = request.args.get("status", "").strip().lower()
+    severity_filter = request.args.get("severity", "").strip().lower()
+    if status_filter in {"open", "acknowledged", "resolved"}:
+        query = query.filter(SecurityAlert.status == status_filter)
+    else:
+        status_filter = ""
+    if severity_filter in {"critical", "high", "medium", "low", "unknown"}:
+        query = query.filter(db.func.lower(SecurityAlert.severity) == severity_filter)
+    else:
+        severity_filter = ""
+
+    alert_items = (
+        query.order_by(SecurityAlert.created_at.desc(), SecurityAlert.id.desc()).limit(100).all()
+    )
+    alert_keys = {(item.device_id, item.cve_id) for item in alert_items if item.cve_id}
+    cve_ids = {cve_id for _device_id, cve_id in alert_keys}
+    latest_findings = {}
+    patches = {}
+    if cve_ids:
+        rows = (
+            Finding.query.join(Scan, Finding.scan_id == Scan.id)
+            .filter(Finding.cve_id.in_(cve_ids))
+            .order_by(Scan.created_at.desc(), Finding.id.desc())
+            .all()
+        )
+        for finding in rows:
+            key = (finding.device_id, finding.cve_id)
+            if key in alert_keys:
+                latest_findings.setdefault(key, finding)
+        for candidate in PatchCandidate.query.filter(PatchCandidate.cve_id.in_(cve_ids)).all():
+            key = (candidate.device_id, candidate.cve_id)
+            if key in alert_keys:
+                patches.setdefault(key, candidate)
+
+    return render_template(
+        "alerts.html",
+        alerts=alert_items,
+        latest_findings=latest_findings,
+        patches=patches,
+        status_filter=status_filter,
+        severity_filter=severity_filter,
+    )
+
+
+@pages_bp.post("/alerts/<int:alert_id>/acknowledge")
+@login_required
+def toggle_alert_acknowledgement(alert_id: int):
+    alert = db.get_or_404(SecurityAlert, alert_id)
+    if alert.status == "resolved":
+        flash("Resolved alerts cannot be changed here.", "warning")
+    elif alert.status == "acknowledged":
+        alert.status = "open"
+        alert.acknowledged_at = None
+        db.session.commit()
+        flash("Alert marked unread.", "success")
+    else:
+        alert.status = "acknowledged"
+        alert.acknowledged_at = datetime.now(UTC).replace(tzinfo=None)
+        db.session.commit()
+        flash("Alert acknowledged.", "success")
+    return redirect(url_for("pages.alerts"))
+
+
+@pages_bp.route("/remediation")
+@login_required
+def remediation():
+    candidates = (
+        PatchCandidate.query.join(Device)
+        .order_by(PatchCandidate.updated_at.desc(), PatchCandidate.id.desc())
+        .limit(100)
+        .all()
+    )
+    return render_template("remediation.html", candidates=candidates)
+
+
+@pages_bp.post("/remediation/<int:candidate_id>/approve")
+@login_required
+def approve_simulated_patch(candidate_id: int):
+    if not current_user.is_admin:
+        abort(403)
+    candidate = db.get_or_404(PatchCandidate, candidate_id)
+    if not candidate.is_simulated:
+        abort(409, description="This workflow only supports simulated candidates.")
+    if candidate.status != "discovered":
+        flash("Only newly discovered simulated candidates can be approved.", "warning")
+        return redirect(url_for("pages.remediation"))
+
+    from app.services.patch_service import approve_patch
+
+    approve_patch(candidate.id, approver=current_user.username)
+    flash("Simulated approval recorded. No device was updated.", "success")
+    return redirect(url_for("pages.remediation"))
+
+
+@pages_bp.post("/remediation/<int:candidate_id>/verify")
+@login_required
+def verify_simulated_patch(candidate_id: int):
+    if not current_user.is_admin:
+        abort(403)
+    candidate = db.get_or_404(PatchCandidate, candidate_id)
+    if not candidate.is_simulated:
+        abort(409, description="This workflow only supports simulated candidates.")
+    if candidate.status != "approved":
+        flash("Approve the simulated workflow before recording verification.", "warning")
+        return redirect(url_for("pages.remediation"))
+
+    from app.services.patch_service import verify_patch
+
+    verify_patch(candidate.id, verifier=current_user.username)
+    flash(
+        "Simulated verification recorded. This is not evidence of a real patch.",
+        "warning",
+    )
+    return redirect(url_for("pages.remediation"))
 
 
 @pages_bp.post("/devices/<int:device_id>/archive")
@@ -135,17 +311,40 @@ def delete_device(device_id: int):
 @login_required
 def device_detail(device_id: int):
     device = db.get_or_404(Device, device_id)
-    scans = (
-        Scan.query.filter_by(device_id=device_id)
-        .order_by(Scan.created_at.desc())
-        .all()
-    )
+    scans = Scan.query.filter_by(device_id=device_id).order_by(Scan.created_at.desc()).all()
     findings = (
         Finding.query.filter_by(device_id=device_id)
         .order_by(Finding.created_at.desc())
+        .limit(100)
         .all()
     )
-    return render_template("device_detail.html", device=device, scans=scans, findings=findings)
+    telemetry = (
+        TelemetryReading.query.filter_by(device_id=device_id)
+        .order_by(TelemetryReading.received_at.desc(), TelemetryReading.id.desc())
+        .limit(12)
+        .all()
+    )
+    alerts_for_device = (
+        SecurityAlert.query.filter_by(device_id=device_id)
+        .order_by(SecurityAlert.created_at.desc())
+        .limit(10)
+        .all()
+    )
+    remediation_items = (
+        PatchCandidate.query.filter_by(device_id=device_id)
+        .order_by(PatchCandidate.updated_at.desc(), PatchCandidate.id.desc())
+        .limit(10)
+        .all()
+    )
+    return render_template(
+        "device_detail.html",
+        device=device,
+        scans=scans,
+        findings=findings,
+        telemetry=telemetry,
+        alerts=alerts_for_device,
+        remediation_items=remediation_items,
+    )
 
 
 @pages_bp.route("/scans")
@@ -212,7 +411,167 @@ def scan_detail(scan_id: int):
 @pages_bp.route("/cves")
 @login_required
 def cves():
-    return render_template("cves.html")
+    query_text = request.args.get("q", "").strip()[:120]
+    severity_filter = request.args.get("severity", "").strip().upper()
+    device_filter = request.args.get("device", "").strip()
+    assessment_filter = request.args.get("assessment", "").strip()
+    patch_filter = request.args.get("patch", "").strip()
+    published_after = request.args.get("published_after", "").strip()
+    published_before = request.args.get("published_before", "").strip()
+
+    query = CVE.query
+    if query_text:
+        search = f"%{query_text}%"
+        query = query.filter(CVE.id.ilike(search) | CVE.description.ilike(search))
+    if severity_filter in {"CRITICAL", "HIGH", "MEDIUM", "LOW"}:
+        query = query.filter(db.func.upper(CVE.severity) == severity_filter)
+    else:
+        severity_filter = ""
+    if device_filter.isdigit():
+        query = query.filter(CVE.findings.any(Finding.device_id == int(device_filter)))
+    else:
+        device_filter = ""
+    if assessment_filter == "confirmed":
+        query = query.filter(CVE.findings.any(Finding.match_status == "affected"))
+    elif assessment_filter == "potential":
+        query = query.filter(
+            CVE.findings.any(Finding.match_status.in_(("potential", "indeterminate")))
+        )
+    elif assessment_filter == "unknown":
+        query = query.filter(~CVE.findings.any())
+    else:
+        assessment_filter = ""
+    patch_cve_ids = db.session.query(PatchCandidate.cve_id).filter(
+        PatchCandidate.cve_id.is_not(None)
+    )
+    if patch_filter == "candidate":
+        query = query.filter(CVE.id.in_(patch_cve_ids))
+    elif patch_filter == "none":
+        query = query.filter(~CVE.id.in_(patch_cve_ids))
+    else:
+        patch_filter = ""
+    try:
+        if published_after:
+            after = datetime.strptime(published_after, "%Y-%m-%d")
+            query = query.filter(CVE.published_date >= after)
+        if published_before:
+            before = datetime.strptime(published_before, "%Y-%m-%d")
+            query = query.filter(CVE.published_date < before + timedelta(days=1))
+    except ValueError:
+        flash("Publication dates must use YYYY-MM-DD.", "error")
+        published_after = ""
+        published_before = ""
+
+    cve_items = (
+        query.order_by(CVE.published_date.desc().nullslast(), CVE.id.desc()).limit(100).all()
+    )
+    cve_ids = [item.id for item in cve_items]
+    findings_by_cve = {cve_id: [] for cve_id in cve_ids}
+    if cve_ids:
+        findings = (
+            Finding.query.join(Scan, Finding.scan_id == Scan.id)
+            .filter(Finding.cve_id.in_(cve_ids))
+            .order_by(Scan.created_at.desc(), Finding.id.desc())
+            .all()
+        )
+        seen_device_cves = set()
+        for finding in findings:
+            key = (finding.device_id, finding.cve_id)
+            if key in seen_device_cves:
+                continue
+            seen_device_cves.add(key)
+            findings_by_cve[finding.cve_id].append(finding)
+
+    latest_sync = (
+        SyncLog.query.filter_by(source="nvd", status="success")
+        .order_by(SyncLog.completed_at.desc(), SyncLog.id.desc())
+        .first()
+    )
+    latest_sync_attempt = (
+        SyncLog.query.filter_by(source="nvd")
+        .order_by(SyncLog.started_at.desc(), SyncLog.id.desc())
+        .first()
+    )
+    patch_cve_ids = {
+        cve_id
+        for (cve_id,) in db.session.query(PatchCandidate.cve_id)
+        .filter(PatchCandidate.cve_id.in_(cve_ids or [""]))
+        .distinct()
+        .all()
+    }
+    return render_template(
+        "cves.html",
+        cves=cve_items,
+        findings_by_cve=findings_by_cve,
+        devices=Device.query.order_by(Device.name.asc()).all(),
+        filters={
+            "q": query_text,
+            "severity": severity_filter,
+            "device": device_filter,
+            "assessment": assessment_filter,
+            "patch": patch_filter,
+            "published_after": published_after,
+            "published_before": published_before,
+        },
+        latest_sync=latest_sync,
+        latest_sync_attempt=latest_sync_attempt,
+        patch_cve_ids=patch_cve_ids,
+        total_cves=db.session.query(CVE).count(),
+        is_admin=current_user.is_admin,
+    )
+
+
+@pages_bp.post("/cves/sync")
+@login_required
+def sync_cves():
+    if not current_user.is_admin:
+        abort(403)
+    keyword = request.form.get("keyword", "Espressif ESP32").strip()
+    if not keyword or len(keyword) > 120:
+        flash("Enter a search phrase of 1 to 120 characters.", "error")
+        return redirect(url_for("pages.cves"))
+    if not _nvd_sync_lock.acquire(blocking=False):
+        flash("An NVD sync is already running in this process.", "warning")
+        return redirect(url_for("pages.cves"))
+
+    sync_log_id = None
+    try:
+        sync_log = SyncLog(
+            source="nvd",
+            status="running",
+            details=f"Keyword: {keyword}",
+            records_processed=0,
+        )
+        db.session.add(sync_log)
+        db.session.commit()
+        sync_log_id = sync_log.id
+
+        from app.services.nvd_sync_service import sync_nvd_catalog
+
+        count = sync_nvd_catalog(keyword)
+        sync_log.status = "success"
+        sync_log.records_processed = count
+        sync_log.completed_at = datetime.now(UTC).replace(tzinfo=None)
+        sync_log.details = f"Keyword: {keyword}; CVE records saved: {count}"
+        db.session.commit()
+        flash(f"NVD sync completed: {count} CVE records processed.", "success")
+    except (requests.RequestException, ValueError, SQLAlchemyError) as error:
+        db.session.rollback()
+        logger.exception("NVD sync failed for keyword %r", keyword)
+        failed_log = db.session.get(SyncLog, sync_log_id) if sync_log_id is not None else None
+        if failed_log is not None:
+            failed_log.status = "failed"
+            failed_log.completed_at = datetime.now(UTC).replace(tzinfo=None)
+            failed_log.details = f"Keyword: {keyword}; {type(error).__name__}: {error}"
+            db.session.commit()
+        flash(
+            "NVD sync failed. Check network access and application logs; "
+            "existing CVE data was preserved.",
+            "error",
+        )
+    finally:
+        _nvd_sync_lock.release()
+    return redirect(url_for("pages.cves"))
 
 
 @pages_bp.route("/cves/<cve_id>")

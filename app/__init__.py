@@ -213,6 +213,25 @@ def create_app(test_config: dict | None = None) -> Flask:
         run_telemetry_subscriber(app)
 
 
+    @app.cli.command("telemetry-demo")
+    def telemetry_demo_cmd():
+        from app.services.telemetry_service import (
+            TelemetryDeviceError,
+            create_local_demo_reading,
+        )
+
+        try:
+            inserted = create_local_demo_reading()
+        except TelemetryDeviceError as error:
+            raise ClickException(str(error)) from error
+        if not inserted:
+            raise ClickException("Could not create a unique local demo reading.")
+        print(
+            "Stored one LOCAL SIMULATED demo reading. "
+            "No MQTT broker or physical device was contacted."
+        )
+
+
     @app.cli.command("create-admin")
     def create_admin_cmd():
         from app.models.user import User

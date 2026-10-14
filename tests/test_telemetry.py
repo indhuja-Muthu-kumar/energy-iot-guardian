@@ -145,12 +145,52 @@ def test_oversized_and_malformed_messages_are_rejected():
 def test_ingestion_checks_topic_device_and_deduplicates():
     app = make_app()
     with app.app_context():
+        assert app.config["TELEMETRY_MQTT_BROKER_HOST"] == "test.mosquitto.org"
+        assert app.config["TELEMETRY_MQTT_TOPIC"] == MQTT_TOPIC
         with pytest.raises(TelemetryValidationError, match="Unexpected MQTT topic"):
             ingest_telemetry_message("wrong/topic", encoded_payload())
 
         assert ingest_telemetry_message(MQTT_TOPIC, encoded_payload()) is True
         assert ingest_telemetry_message(MQTT_TOPIC, encoded_payload()) is False
         assert TelemetryReading.query.count() == 1
+        assert TelemetryReading.query.one().ingest_source == "mqtt"
+
+
+def test_local_demo_command_stores_and_labels_synthetic_telemetry():
+    app = make_app()
+    runner = app.test_cli_runner()
+
+    result = runner.invoke(args=["telemetry-demo"])
+
+    assert result.exit_code == 0, result.output
+    assert "LOCAL SIMULATED" in result.output
+    assert "No MQTT broker or physical device was contacted" in result.output
+    with app.app_context():
+        reading = TelemetryReading.query.one()
+        assert reading.ingest_source == "local_demo"
+        assert reading.telemetry_status == "SIMULATED"
+        assert reading.chip_model == "LOCAL-DEMO"
+
+    client = app.test_client()
+    with client.session_transaction() as session:
+        session["_user_id"] = str(app.telemetry_user_id)
+        session["_fresh"] = True
+    response = client.get("/api/dashboard/telemetry")
+
+    assert response.status_code == 200
+    assert response.json["state"] == "demo"
+    assert response.json["latest"]["ingest_source"] == "local_demo"
+
+
+def test_telemetry_ingestion_rejects_unknown_source():
+    app = make_app()
+    with app.app_context():
+        with pytest.raises(ValueError, match="ingest_source"):
+            ingest_telemetry_message(
+                MQTT_TOPIC,
+                encoded_payload(),
+                ingest_source="unknown",
+            )
 
 
 def test_unknown_and_archived_devices_cannot_ingest_messages():
@@ -572,6 +612,9 @@ def test_mqtt_worker_stores_messages_and_resubscribes_after_reconnect(
         def username_pw_set(self, *_args, **_kwargs):
             pytest.fail("Unexpected MQTT credentials in this test.")
 
+        def reconnect_delay_set(self, min_delay, max_delay):
+            assert (min_delay, max_delay) == (1, 30)
+
         def tls_set(self):
             pytest.fail("Unexpected MQTT TLS in this test.")
 
@@ -582,12 +625,21 @@ def test_mqtt_worker_stores_messages_and_resubscribes_after_reconnect(
 
         def subscribe(self, topic, qos):
             self.subscriptions.append((topic, qos))
+            return 0, len(self.subscriptions)
 
         def loop_forever(self, retry_first_connection):
             assert retry_first_connection is True
             reason_code = SimpleNamespace(is_failure=False)
-            for _ in range(2):
+            for message_id in range(1, 3):
                 self.on_connect(self, None, None, reason_code, None)
+                self.on_subscribe(
+                    self,
+                    None,
+                    message_id,
+                    [reason_code],
+                    None,
+                )
+            self.on_disconnect(self, None, None, reason_code, None)
             message = SimpleNamespace(
                 topic=MQTT_TOPIC,
                 payload=encoded_payload(),
