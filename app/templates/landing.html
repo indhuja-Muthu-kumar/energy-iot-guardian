@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Energy-IoT CVE Monitor{% endblock %}
+{% block extra_css %}<link rel="stylesheet" href="{{ url_for('static', filename='css/landing.css') }}">{% endblock %}
+{% block content %}
+  <section class="hero">
+    <div>
+      <p class="status-pill">Live NVD + CISA KEV monitoring</p>
+      <h1>Track energy and industrial IoT exposure before it becomes an incident.</h1>
+      <p>Centralize inventory, correlate firmware to CVEs, and prioritize acknowledged exploited vulnerabilities for field devices and edge equipment.</p>
+      <div class="stack">
+        <a class="button" href="{{ url_for('auth.login') }}">Open dashboard</a>
+      </div>
+    </div>
+    <div class="hero-panel card">
+      <div class="grid grid-hero">
+        <div class="feature-card"><strong>Inventory</strong><p>Track inverter, meter, gateway, and control devices.</p></div>
+        <div class="feature-card"><strong>Matches</strong><p>Correlate firmware and affected versions to known CVEs.</p></div>
+        <div class="feature-card"><strong>KEV</strong><p>Highlight CISA Known Exploited Vulnerabilities with clear action prompts.</p></div>
+        <div class="feature-card"><strong>Reports</strong><p>Export CSV summaries and share a clear risk story with teams.</p></div>
+      </div>
+    </div>
+  </section>
+{% endblock %}

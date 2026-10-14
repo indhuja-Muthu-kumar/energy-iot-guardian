@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block content %}
+  <p class="section-kicker">REPORTING &amp; EXPORTS</p>
+  <div class="page-heading"><div><h1 class="page-title">Reports</h1><p class="page-description">Export persisted scan findings for review and sharing.</p></div>
+    <a class="button report-export-all" href="{{ url_for('api_reports.export_report_csv') }}"><span aria-hidden="true">↓</span> Export all findings</a>
+  </div>
+  <section class="card report-export-panel">
+    <div class="panel-header"><div><h2>Export a scan report</h2><p>Choose a scan to download only its findings.</p></div></div>
+    {% if scans %}
+      <form class="report-filter" action="{{ url_for('api_reports.export_report_csv') }}" method="get">
+        <label for="scan_id">Scan record</label>
+        <select id="scan_id" name="scan_id" required aria-describedby="scan-export-help">
+          <option value="" disabled selected>Select a scan</option>
+          {% for scan in scans %}
+            <option value="{{ scan.id }}">Scan #{{ scan.id }} — {{ scan.device.name if scan.device else 'Unknown device' }} ({{ scan.status }})</option>
+          {% endfor %}
+        </select>
+        <button type="submit"><span aria-hidden="true">↓</span> Export selected scan</button>
+      </form>
+      <p class="form-hint" id="scan-export-help">Downloads the selected scan’s saved findings as CSV. Existing records are not changed.</p>
+    {% else %}
+      <p class="empty-state">No scans yet. Register a device and run a scan to create a report.</p>
+      <a class="button secondary" href="{{ url_for('pages.scan_new') }}">Start a scan</a>
+    {% endif %}
+  </section>
+  <section class="card report-history-panel">
+    <div class="panel-header"><div><h2>Scan report history</h2><p>CSV exports are generated from saved findings; no records are changed.</p></div></div>
+    {% if scans %}
+    <div class="table-scroll"><table class="table responsive-table reports-table">
+      <thead><tr><th>Scan</th><th>Device</th><th>Status</th><th>Created</th><th>Export</th></tr></thead>
+      <tbody>
+        {% for scan in scans %}
+          <tr>
+            <td data-label="Scan"><a href="{{ url_for('pages.scan_detail', scan_id=scan.id) }}">#{{ scan.id }}</a></td>
+            <td data-label="Device">{% if scan.device %}<a href="{{ url_for('pages.device_detail', device_id=scan.device.id) }}">{{ scan.device.name }}</a>{% else %}Unknown device{% endif %}</td>
+            <td data-label="Status"><span class="status-pill {{ scan.status|lower }}">{{ scan.status|title }}</span></td>
+            <td data-label="Created">{{ scan.created_at.strftime('%Y-%m-%d %H:%M') if scan.created_at else '—' }}</td>
+            <td data-label="Export"><a class="table-action" href="{{ url_for('api_reports.export_report_csv', scan_id=scan.id) }}">Download CSV ↓</a></td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table></div>
+    {% else %}
+      <p class="empty-state">There are no scan records to list.</p>
+    {% endif %}
+  </section>
+{% endblock %}

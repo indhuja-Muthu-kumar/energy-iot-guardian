@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Sign in | Energy-IoT CVE Monitor{% endblock %}
+{% block content %}
+  <section class="auth-card card" aria-labelledby="login-title">
+    <span class="auth-emblem" aria-hidden="true">
+      <svg viewBox="0 0 32 36"><path d="M16 2 29 7v10c0 8-5 13-13 17C8 30 3 25 3 17V7l13-5Z"/><path d="m18 7-8 13h6l-2 9 9-14h-6l1-8Z"/></svg>
+    </span>
+    <p class="auth-kicker">ENERGY-IOT SECURITY MONITOR</p>
+    <h1 class="page-title" id="login-title">Welcome back</h1>
+    <p class="auth-description">Sign in to review device exposure and scan activity.</p>
+    <form method="POST">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <label for="username">Username<input id="username" name="username" type="text" autocomplete="username" required></label>
+      <label for="password">Password<input id="password" name="password" type="password" autocomplete="current-password" required></label>
+      <button type="submit">Sign in securely <span aria-hidden="true">→</span></button>
+    </form>
+    <p class="auth-footnote"><span aria-hidden="true">⛨</span> Protected access to your monitoring workspace</p>
+  </section>
+{% endblock %}

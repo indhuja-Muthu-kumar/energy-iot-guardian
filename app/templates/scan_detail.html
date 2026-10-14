@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block content %}
+  <div class="page-heading">
+    <div><p class="section-kicker">SCAN RECORD · #{{ scan.id }}</p><h1 class="page-title">Scan details</h1><p class="page-description">{% if scan.device %}{{ scan.device.name }} · {{ scan.device.vendor }} {{ scan.device.model }}{% else %}Unknown device{% endif %}</p></div>
+    <a class="button secondary" href="{{ url_for('pages.scans') }}">Back to scans</a>
+  </div>
+  <section class="card scan-summary-card" aria-label="Scan summary">
+    <div class="scan-summary-top">
+      <div><span class="detail-label">Status</span><span class="status-pill {{ scan.status|lower }}">{{ scan.status|title }}</span></div>
+      <div><span class="detail-label">Scan type</span>{{ 'ESP32 components' if scan.scan_type == 'components' else 'Device' }}</div>
+      <div><span class="detail-label">Device</span>{% if scan.device %}<a href="{{ url_for('pages.device_detail', device_id=scan.device.id) }}">{{ scan.device.name }}</a>{% else %}<span>Unknown device</span>{% endif %}</div>
+      <div><span class="detail-label">Findings</span><strong>{{ scan.findings|length }}</strong></div>
+      <div><span class="detail-label">Started</span><span>{{ scan.started_at.strftime('%Y-%m-%d %H:%M:%S') if scan.started_at else 'N/A' }}</span></div>
+      <div><span class="detail-label">Completed</span><span>{{ scan.completed_at.strftime('%Y-%m-%d %H:%M:%S') if scan.completed_at else 'N/A' }}</span></div>
+    </div>
+    <div class="scan-summary-text"><span class="detail-label">Summary</span><p>{{ scan.summary or 'No summary yet.' }}</p></div>
+  </section>
+  <div class="findings-heading">
+    <div><h2>Findings <span class="count-chip">{{ scan.findings|length }}</span></h2><p>Potential matches and evaluated NVD CPE/version results from this scan.</p></div>
+    <a class="button secondary" href="{{ url_for('api_reports.export_report_csv', scan_id=scan.id) }}">Export CSV</a>
+  </div>
+  {% if scan.findings %}
+    <section class="card findings-table-panel">
+      <div class="table-scroll"><table class="table findings-table">
+        <thead>
+          <tr>
+            <th>CVE ID</th>
+            <th>Severity</th>
+            <th>CVSS score</th>
+            <th>CVSS vector</th>
+            {% if scan.scan_type == 'components' %}<th>Component</th>{% endif %}
+            {% if scan.scan_type == 'components' %}<th>Confidence / source</th>{% endif %}
+            <th>Match status</th>
+            <th>Evidence</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for finding in scan.findings %}
+            <tr>
+              <td><a class="cve-link" href="{{ url_for('pages.cve_detail', cve_id=finding.cve_id) }}">{{ finding.cve_id }}</a><a class="source-link" href="https://nvd.nist.gov/vuln/detail/{{ finding.cve_id|urlencode }}" target="_blank" rel="noopener noreferrer">NVD source ↗</a></td>
+              <td><span class="severity-badge {{ finding.severity|lower if finding.severity|lower in ('critical', 'high', 'medium', 'low') else 'unknown' }}">{{ finding.severity|title if finding.severity and finding.severity|lower != 'unknown' else 'Unknown' }}</span></td>
+              <td>{{ finding.score if finding.score is not none else (finding.cve.cvss_score if finding.cve else 'Not available') }}</td>
+              <td>{{ finding.cve.cvss_vector if finding.cve and finding.cve.cvss_vector else 'Not available' }}</td>
+              {% if scan.scan_type == 'components' %}
+                <td>{{ finding.component_name or 'Unknown' }} {{ finding.component_version or '' }}</td>
+                <td>{{ finding.confidence|title }} · {{ finding.cve.source|upper if finding.cve else 'Unknown' }}</td>
+              {% endif %}
+              <td>
+                {% if scan.scan_type == 'components' and finding.match_status == 'affected' %}
+                  <span class="match-badge evaluated">NVD affected version · {{ finding.confidence|title }} confidence</span>
+                {% elif scan.scan_type == 'components' and finding.match_status == 'not_applicable' %}
+                  <span class="match-badge evaluated">Not applicable by evaluated NVD version data · {{ finding.confidence|title }} confidence</span>
+                {% elif scan.scan_type == 'components' and finding.match_status == 'indeterminate' %}
+                  <span class="match-badge indeterminate">Indeterminate NVD CPE configuration · {{ finding.confidence|title }} confidence</span>
+                {% elif scan.scan_type == 'components' and finding.match_status == 'potential' %}
+                  <span class="match-badge potential">Potential NVD match · {{ finding.confidence|title }} confidence</span>
+                {% elif finding.matched_by == 'nvd-vendor-model-keyword' %}
+                  <span class="match-badge potential">Potential keyword match</span>
+                {% elif finding.matched_by == 'nvd-cpe-product-potential' %}
+                  <span class="match-badge potential">Potential CPE product match</span>
+                {% elif finding.matched_by == 'nvd-cpe-logic-indeterminate' %}
+                  <span class="match-badge indeterminate">Indeterminate CPE configuration match</span>
+                {% elif finding.matched_by == 'nvd-cpe-version-range' %}
+                  <span class="match-badge evaluated">NVD CPE/version match (device not independently verified)</span>
+                {% else %}
+                  {{ finding.matched_by or 'Unknown' }}
+                {% endif %}
+              </td>
+              <td>{{ finding.evidence or 'No supporting evidence recorded.' }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table></div>
+      <p class="table-note">Potential keyword and product matches are not confirmed vulnerabilities. Component results are based on versions reported by the simulated ESP32 and authoritative NVD CPE data. Confidence rates match evidence only; it does not establish hardware authenticity or exploitability.</p>
+    </section>
+  {% else %}
+    <section class="card empty-panel" role="status">
+      {% if scan.status == 'failed' %}
+        <h3>Scan failed</h3><p>The scan failed. No partial findings were saved; this is not a clean scan result.</p>
+      {% elif scan.status == 'running' %}
+        <h3>Scan in progress</h3><p>The scan is still running. Findings will be available after it completes.</p>
+      {% elif scan.status == 'completed' %}
+        {% if scan.scan_type == 'components' %}
+          <h3>No applicable NVD results for mapped components</h3><p>This is not proof of safety. Review the summary for components without an exact NVD CPE mapping; the reported firmware/component inventory may be incomplete.</p>
+        {% else %}
+          <h3>No potential matches found</h3><p>No potential matches were found in the data returned for this scan.</p>
+        {% endif %}
+      {% else %}
+        <h3>No findings recorded</h3><p>No findings were recorded for this scan.</p>
+      {% endif %}
+    </section>
+  {% endif %}
+{% endblock %}

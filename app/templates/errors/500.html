@@ -1,0 +1,4 @@
+{% extends "base.html" %}
+{% block content %}
+  <section class="card error-panel" role="alert"><span class="error-code">500</span><p class="section-kicker">SYSTEM STATUS</p><h1 class="page-title">Something went wrong</h1><p>An unexpected server error occurred. Please try again in a moment.</p><a class="button secondary" href="{{ url_for('pages.dashboard') if current_user.is_authenticated else url_for('pages.landing') }}">Return to a safe page</a></section>
+{% endblock %}

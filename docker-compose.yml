@@ -1,0 +1,30 @@
+version: "3.9"
+services:
+  web:
+    build: .
+    ports:
+      - "5000:5000"
+    environment:
+      SECRET_KEY: "${SECRET_KEY:?Set SECRET_KEY in the .env file}"
+      DATABASE_URL: "mysql+pymysql://${MYSQL_USER:?Set MYSQL_USER in the .env file}:${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in the .env file}@db:3306/energy_iot_cve_monitor"
+      FLASK_ENV: "production"
+    depends_on:
+      db:
+        condition: service_healthy
+  db:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD in the .env file}"
+      MYSQL_DATABASE: "energy_iot_cve_monitor"
+      MYSQL_USER: "${MYSQL_USER:?Set MYSQL_USER in the .env file}"
+      MYSQL_PASSWORD: "${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in the .env file}"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./database:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+volumes:
+  mysql_data:

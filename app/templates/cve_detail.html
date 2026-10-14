@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block content %}
+  <p class="section-kicker">VULNERABILITY INTELLIGENCE</p>
+  <div class="page-heading">
+    <div><h1 class="page-title">CVE {{ cve_id }}</h1><p class="page-description">Stored vulnerability information associated with this identifier.</p></div>
+    <a class="button secondary" href="{{ url_for('pages.cves') }}">Back to CVE database</a>
+  </div>
+  <section class="card cve-detail-card" data-cve-detail data-cve-id="{{ cve_id }}">
+    <p class="empty-state" role="status">Loading stored CVE details…</p>
+  </section>
+  <script type="module" src="{{ url_for('static', filename='js/cves.js') }}"></script>
+{% endblock %}

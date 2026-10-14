@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block content %}
+  <p class="section-kicker">ADMINISTRATION</p>
+  <h1 class="page-title">Users</h1>
+  <p class="page-description">Review accounts with access to this monitoring workspace.</p>
+  <section class="card">
+    {% if users %}
+    <div class="table-scroll"><table class="table">
+      <thead><tr><th>Username</th><th>Email</th><th>Admin</th></tr></thead>
+      <tbody>
+        {% for user in users %}
+          <tr><td><strong>{{ user.username }}</strong></td><td>{{ user.email }}</td><td><span class="status-pill {{ 'admin' if user.is_admin else '' }}">{{ 'Administrator' if user.is_admin else 'Standard user' }}</span></td></tr>
+        {% endfor %}
+      </tbody>
+    </table></div>
+    {% else %}<p class="empty-state">No users found.</p>{% endif %}
+  </section>
+{% endblock %}

@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block content %}
+  <p class="section-kicker">WORKSPACE CONFIGURATION</p>
+  <h1 class="page-title">Settings</h1>
+  <p class="page-description">Application configuration and account controls.</p>
+  <section class="card settings-panel">
+    <h2>Environment configuration</h2>
+    <p>Runtime configuration is managed through environment variables loaded from your local <code>.env</code> file. Update that file and restart the application to change database or secret settings.</p>
+    <div class="settings-notice"><span aria-hidden="true">ⓘ</span><p>Secrets and database credentials are intentionally not displayed in this interface.</p></div>
+  </section>
+  <section class="card settings-panel">
+    <h2>Account</h2>
+    <p>Signed in as <strong>{{ current_user.username }}</strong>. Use the account control in the navigation to sign out securely.</p>
+    {% if current_user.is_admin %}<a class="button secondary" href="{{ url_for('pages.admin_users') }}">Manage users</a>{% endif %}
+  </section>
+{% endblock %}

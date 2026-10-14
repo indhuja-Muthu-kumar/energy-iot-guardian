@@ -1,0 +1,289 @@
+{% extends "base.html" %}
+{% block title %}Dashboard | Energy-IoT CVE Monitor{% endblock %}
+{% block body_class %}dashboard-body{% endblock %}
+{% block extra_css %}<link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">{% endblock %}
+{% block content %}
+  {% set severity = vulnerability_summary.severity %}
+  {% set potential_total = severity.critical.potential + severity.high.potential + severity.medium.potential + severity.low.potential %}
+  <div class="dashboard-shell" data-dashboard>
+    <aside class="dashboard-sidebar" aria-label="Main navigation">
+      <a class="dashboard-brand" href="{{ url_for('pages.dashboard') }}">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 32 36"><path d="M16 2 29 7v10c0 8-5 13-13 17C8 30 3 25 3 17V7l13-5Z"/><path d="m18 7-8 13h6l-2 9 9-14h-6l1-8Z"/></svg>
+        </span>
+        <span><strong>Energy-IoT</strong><small>CVE Monitor</small></span>
+      </a>
+
+      <nav class="dashboard-nav">
+        <a class="active" href="{{ url_for('pages.dashboard') }}" aria-current="page"><span aria-hidden="true">⌂</span>Dashboard</a>
+        <a href="{{ url_for('pages.devices') }}"><span aria-hidden="true">▣</span>Devices</a>
+        <a href="{{ url_for('pages.scans') }}"><span aria-hidden="true">⌕</span>Scans</a>
+        <a href="{{ url_for('pages.reports') }}"><span aria-hidden="true">▤</span>Reports</a>
+        <a href="{{ url_for('pages.cves') }}"><span aria-hidden="true">⛨</span>CVE Database</a>
+        <a href="{{ url_for('pages.settings') }}"><span aria-hidden="true">⚙</span>Settings</a>
+      </nav>
+
+      <div class="sidebar-energy" aria-label="Energy monitoring">
+        <span class="energy-shield" aria-hidden="true">ϟ</span>
+        <strong>Smarter Energy.<br>Safer Tomorrow.</strong>
+        <svg viewBox="0 0 180 24" aria-hidden="true"><path d="M0 14h35l7-8 9 15 8-12 6 5h20l7-6 6 9 7-3h75"/></svg>
+        <small>Energy security monitoring</small>
+      </div>
+    </aside>
+
+    <div class="dashboard-main">
+      <header class="dashboard-topbar">
+        <div class="topbar-accent" aria-hidden="true"></div>
+        <div class="welcome-copy">
+          <p class="eyebrow">SECURITY OVERVIEW</p>
+          <h1>Welcome back, {{ current_user.username|e }}</h1>
+          <p>Here is the latest activity across your Energy-IoT devices.</p>
+        </div>
+        <div class="topbar-actions">
+          <a class="notification-link" href="#recent-alerts" aria-label="Recent scan activity">
+            <span aria-hidden="true"><svg viewBox="0 0 20 20"><path d="M15.5 8a5.5 5.5 0 0 0-11 0c0 6-2 6-2 7.5h15C17.5 14 15.5 14 15.5 8ZM8 18h4"/></svg></span>
+            {% if dashboard_panels.recent_scans %}<b>{{ dashboard_panels.recent_scans|length }}</b>{% endif %}
+          </a>
+          <span class="profile-avatar" aria-hidden="true">{{ current_user.username[:1]|upper }}</span>
+          <span class="profile-name">{{ current_user.username|e }}</span>
+          <form action="{{ url_for('auth.logout') }}" method="post">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button class="dashboard-logout" type="submit">Sign out</button>
+          </form>
+        </div>
+      </header>
+
+      <section class="dashboard-content" aria-label="Dashboard overview">
+        <section class="severity-grid" aria-label="Latest per-device severity totals">
+          {% for level, color, icon in (('critical', 'critical', '◆'), ('high', 'high', '▲'), ('medium', 'medium', '●'), ('low', 'low', '━')) %}
+            <article class="severity-card {{ color }}">
+              <span class="severity-icon" aria-hidden="true">{{ icon }}</span>
+              <div class="severity-copy">
+                <span class="severity-heading">Potential {{ level|title }}</span>
+                <strong>{{ severity[level].potential }}</strong>
+                <small>{{ severity[level].evaluated }} evaluated CPE/version match{% if severity[level].evaluated != 1 %}es{% endif %}</small>
+              </div>
+              <span class="severity-chevron" aria-hidden="true">›</span>
+            </article>
+          {% endfor %}
+        </section>
+
+        <p class="summary-disclaimer">
+          Potential and indeterminate matches are not confirmed vulnerabilities. Counts include unique CVEs from each device's newest scan by creation time (scan ID breaks ties); a newer failed or incomplete scan suppresses older results.
+          {{ vulnerability_summary.devices_with_completed_latest_scan }} of {{ vulnerability_summary.device_count }} devices have a completed latest scan.
+        </p>
+        {% if vulnerability_summary.device_count and not vulnerability_summary.devices_with_completed_latest_scan %}
+          <p class="summary-disclaimer">No device has a completed latest scan yet. Run a scan to populate vulnerability findings.</p>
+        {% endif %}
+
+        <section class="overview-grid" aria-label="Vulnerability overview">
+          <article class="dashboard-panel trend-panel">
+            <div class="panel-heading">
+              <div><h2>Vulnerability trend</h2><p>Potential findings across recent completed scans</p></div>
+              <span class="range-chip">Recent scans</span>
+            </div>
+            <div class="trend-chart-wrap">
+              <svg class="trend-chart" viewBox="0 0 700 190" role="img" aria-label="Potential finding counts for recent completed scans" data-trend-chart data-trend-points='{{ dashboard_panels.trend_points|tojson|forceescape }}'>
+                <defs><linearGradient id="trend-fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stop-color="#ff344a" stop-opacity=".36"/><stop offset="100%" stop-color="#ff344a" stop-opacity="0"/></linearGradient></defs>
+                <g class="chart-grid">
+                  <line x1="38" y1="20" x2="690" y2="20"/><line x1="38" y1="60" x2="690" y2="60"/>
+                  <line x1="38" y1="100" x2="690" y2="100"/><line x1="38" y1="140" x2="690" y2="140"/>
+                </g>
+                <g class="chart-axis-labels" data-trend-axis></g>
+                <path class="trend-area" data-trend-area></path>
+                <path class="trend-line" data-trend-line></path>
+                <g data-trend-dots></g>
+                <g class="chart-x-labels" data-trend-labels></g>
+              </svg>
+              <p class="chart-state" data-trend-state role="status">Preparing trend…</p>
+            </div>
+          </article>
+
+          <article class="dashboard-panel severity-panel">
+            <div class="panel-heading">
+              <div><h2>Findings by severity</h2><p>Potential / indeterminate latest-scan matches</p></div>
+            </div>
+            <div class="donut-layout">
+              <div class="donut-chart">
+                <svg viewBox="0 0 120 120" role="img" aria-label="{{ potential_total }} potential findings across all severities" data-severity-chart data-severity-values='{{ [severity.critical.potential, severity.high.potential, severity.medium.potential, severity.low.potential]|tojson|forceescape }}'>
+                  <circle class="donut-track" cx="60" cy="60" r="48"></circle>
+                  <g data-donut-segments></g>
+                </svg>
+                <span><strong>{{ potential_total }}</strong><small>Potential</small></span>
+              </div>
+              <ul class="severity-legend">
+                {% for level in ('critical', 'high', 'medium', 'low') %}
+                  <li class="{{ level }}"><span class="legend-dot"></span><span>{{ level|title }}</span><strong>{{ severity[level].potential }}</strong></li>
+                {% endfor %}
+              </ul>
+            </div>
+            {% if vulnerability_summary.unknown_severity.evaluated or vulnerability_summary.unknown_severity.potential %}
+              <p class="unknown-note">Unknown severity: {{ vulnerability_summary.unknown_severity.potential }} potential, {{ vulnerability_summary.unknown_severity.evaluated }} evaluated.</p>
+            {% endif %}
+          </article>
+
+          <article class="dashboard-panel inventory-panel">
+            <div class="panel-heading">
+              <div><h2>Devices</h2><p>{{ wallet.devices }} registered device{% if wallet.devices != 1 %}s{% endif %}</p></div>
+              <a class="panel-arrow" href="{{ url_for('pages.devices') }}" aria-label="View all devices">›</a>
+            </div>
+            {% if dashboard_panels.devices %}
+              <ul class="device-list">
+                {% for device in dashboard_panels.devices %}
+                  <li>
+                    <span class="device-status-dot" aria-hidden="true"></span>
+                    <a href="{{ url_for('pages.device_detail', device_id=device.id) }}"><strong>{{ device.name }}</strong><small>{{ device.vendor }} · {{ device.model }}</small></a>
+                  </li>
+                {% endfor %}
+              </ul>
+              <a class="text-link inventory-link" href="{{ url_for('pages.devices') }}">View inventory <span aria-hidden="true">→</span></a>
+            {% else %}
+              <p class="empty-state">No devices are registered yet. Add a device to start monitoring.</p>
+              <a class="text-link" href="{{ url_for('pages.devices') }}">Open device inventory →</a>
+            {% endif %}
+          </article>
+        </section>
+
+        <section class="dashboard-panel telemetry-panel" aria-labelledby="telemetry-title" data-device-telemetry data-telemetry-url="{{ url_for('api_dashboard.dashboard_telemetry') }}">
+          <div class="panel-heading">
+            <div>
+              <h2 id="telemetry-title">Simulated solar telemetry</h2>
+              <p>SolarGuard-01 · SMA Solar Technology · Sunny Boy TL-21</p>
+            </div>
+            <span class="simulation-badge">SIMULATED · WOKWI DEVICE</span>
+          </div>
+          <p class="telemetry-disclaimer">
+            Readings come from the Wokwi ESP32 simulation through MQTT. Solar asset labels are descriptive metadata, not verified SMA hardware measurements or inverter firmware.
+          </p>
+          <div class="telemetry-metrics" aria-live="polite">
+            <article class="telemetry-metric">
+              <span>Voltage</span>
+              <strong><span data-telemetry-voltage>--</span><small> V</small></strong>
+            </article>
+            <article class="telemetry-metric">
+              <span>Current</span>
+              <strong><span data-telemetry-current>--</span><small> A</small></strong>
+            </article>
+            <article class="telemetry-metric">
+              <span>Calculated power</span>
+              <strong><span data-telemetry-power>--</span><small> W</small></strong>
+            </article>
+            <article class="telemetry-metric telemetry-status">
+              <span>Demo status</span>
+              <strong data-telemetry-status>Waiting for telemetry</strong>
+            </article>
+          </div>
+          <p class="telemetry-last-received">Last received: <time data-telemetry-received>--</time></p>
+          <div class="telemetry-runtime">
+            <h3>ESP32 runtime information</h3>
+            <p>Chip: <span data-telemetry-chip>--</span></p>
+            <p>Arduino ESP32 core: <span data-telemetry-arduino>--</span></p>
+            <p>ESP-IDF: <span data-telemetry-idf>--</span></p>
+            <p class="telemetry-disclaimer">The ESP32 runtime versions are not the SMA inverter's firmware version. Component inventory is incomplete until additional software is identified.</p>
+          </div>
+          <div class="telemetry-history">
+            <h3>Recent simulated readings <small>Updates every 3 seconds</small></h3>
+            <div class="table-scroll">
+              <table class="dashboard-table">
+                <thead><tr><th>Time</th><th>Voltage (V)</th><th>Current (A)</th><th>Power (W)</th></tr></thead>
+                <tbody data-telemetry-history>
+                  <tr><td colspan="4">Waiting for telemetry from Wokwi…</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <section class="activity-grid" aria-label="Recent device activity">
+          <article class="dashboard-panel scans-panel">
+            <div class="panel-heading">
+              <div><h2>Recent scans</h2><p>Latest scan activity across your devices</p></div>
+              <a class="text-link" href="{{ url_for('pages.scans') }}">View all <span aria-hidden="true">→</span></a>
+            </div>
+            {% if dashboard_panels.recent_scans %}
+              <div class="table-scroll">
+                <table class="dashboard-table">
+                  <thead><tr><th>ID</th><th>Device</th><th>Status</th><th>Potential findings</th><th>Timestamp</th></tr></thead>
+                  <tbody>
+                    {% for item in dashboard_panels.recent_scans %}
+                      {% set scan = item.scan %}
+                      <tr>
+                        <td><a class="scan-id" href="{{ url_for('pages.scan_detail', scan_id=scan.id) }}">#{{ scan.id }}</a></td>
+                        <td>
+                          {% if scan.device %}
+                            <a class="table-device" href="{{ url_for('pages.device_detail', device_id=scan.device.id) }}">{{ scan.device.name }}</a>
+                            <small>{{ scan.device.vendor }} · {{ scan.device.model }}</small>
+                            {% if scan.scan_type == 'components' %}<small>ESP32 component assessment</small>{% endif %}
+                          {% else %}<span>Unknown device</span>{% endif %}
+                        </td>
+                        <td><span class="status-badge {{ scan.status|lower|replace(' ', '-') }}">{{ scan.status|title }}</span></td>
+                        <td><span class="finding-count"><i aria-hidden="true"></i>{{ item.potential_findings }} potential</span></td>
+                        <td class="timestamp">{{ (scan.completed_at or scan.created_at).strftime('%Y-%m-%d %H:%M') if scan.completed_at or scan.created_at else '—' }}</td>
+                      </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+            {% else %}
+              <p class="empty-state">No scans yet. Start a scan to see real device activity here.</p>
+              <a class="text-link" href="{{ url_for('pages.scan_new') }}">Start a scan →</a>
+            {% endif %}
+          </article>
+
+          <div class="activity-side">
+            <article class="dashboard-panel risk-panel">
+              <div class="panel-heading">
+                <div><h2>Top risk devices</h2><p>Latest-scan Critical + High matches</p></div>
+                <a class="text-link" href="{{ url_for('pages.devices') }}">View all <span aria-hidden="true">→</span></a>
+              </div>
+              {% if dashboard_panels.risk_devices %}
+                <ul class="risk-list">
+                  {% for device in dashboard_panels.risk_devices %}
+                    {% set risk_count = device.severity.critical.evaluated + device.severity.critical.potential + device.severity.high.evaluated + device.severity.high.potential %}
+                    {% set all_potential_count = device.severity.critical.potential + device.severity.high.potential + device.severity.medium.potential + device.severity.low.potential %}
+                    <li>
+                      <span class="risk-device-icon" aria-hidden="true">▣</span>
+                      <a href="{{ url_for('pages.device_detail', device_id=device.id) }}"><strong>{{ device.name }}</strong><small>{{ device.vendor }} · {{ device.model }}</small></a>
+                      <span class="risk-score" aria-label="{{ risk_count }} Critical and High CVEs; {{ all_potential_count }} total potential matches"><strong>{{ risk_count }} C/H</strong><small>{{ all_potential_count }} total potential</small></span>
+                    </li>
+                  {% endfor %}
+                </ul>
+                <p class="panel-footnote">Counts are CVEs per device. Potential matches are not confirmed vulnerabilities.</p>
+              {% else %}
+                <p class="empty-state">No latest-scan Critical or High matches to rank.</p>
+              {% endif %}
+            </article>
+
+            <article class="dashboard-panel alerts-panel" id="recent-alerts">
+              <div class="panel-heading">
+                <div><h2>Recent alerts</h2><p>Latest scan status updates</p></div>
+                <a class="text-link" href="{{ url_for('pages.scans') }}">View all <span aria-hidden="true">→</span></a>
+              </div>
+              {% if dashboard_panels.recent_scans %}
+                <ul class="alert-list">
+                  {% for item in dashboard_panels.recent_scans[:4] %}
+                    {% set scan = item.scan %}
+                    <li>
+                      <span class="alert-icon {{ scan.status|lower }}" aria-hidden="true">{% if scan.status == 'completed' %}✓{% elif scan.status == 'failed' %}!{% else %}…{% endif %}</span>
+                      <a href="{{ url_for('pages.scan_detail', scan_id=scan.id) }}"><strong>Scan #{{ scan.id }} {{ scan.status|lower }}</strong><small>{{ item.potential_findings }} potential finding{% if item.potential_findings != 1 %}s{% endif %}{% if scan.device %} · {{ scan.device.name }}{% endif %}</small></a>
+                      <time>{{ (scan.completed_at or scan.created_at).strftime('%m-%d %H:%M') if scan.completed_at or scan.created_at else '—' }}</time>
+                    </li>
+                  {% endfor %}
+                </ul>
+              {% else %}
+                <p class="empty-state">No scan activity to report.</p>
+              {% endif %}
+            </article>
+          </div>
+        </section>
+        <p class="dashboard-footnote">Evaluated CPE/version matches indicate NVD configuration applicability only; device identity and exploitability are not independently verified.</p>
+      </section>
+
+      <footer class="energy-footer" aria-label="Energy IoT cybersecurity">
+        <svg viewBox="0 0 1440 64" preserveAspectRatio="none" aria-hidden="true"><path class="wave-fill" d="M0 46c90-32 125 23 206 4s103-40 188-16 131 18 204-1 111-29 184-5 120 36 207 5 121-27 191-3 153 27 260-5v39H0Z"/><path class="wave-line" d="M0 46c90-32 125 23 206 4s103-40 188-16 131 18 204-1 111-29 184-5 120 36 207 5 121-27 191-3 153 27 260-5"/></svg>
+        <span>ENERGY <i>/</i> IOT <i>/</i> CYBERSECURITY</span>
+      </footer>
+    </div>
+  </div>
+{% endblock %}
+{% block extra_js %}<script type="module" src="{{ url_for('static', filename='js/dashboard.js') }}"></script>{% endblock %}

@@ -1,0 +1,4 @@
+{% extends "base.html" %}
+{% block content %}
+  <section class="card error-panel" role="status"><span class="error-code">404</span><p class="section-kicker">RESOURCE LOOKUP</p><h1 class="page-title">Page not found</h1><p>The requested page was not found.</p><a class="button secondary" href="{{ url_for('pages.dashboard') if current_user.is_authenticated else url_for('pages.landing') }}">Return to a safe page</a></section>
+{% endblock %}

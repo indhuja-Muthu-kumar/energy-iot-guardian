@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block content %}
+  <div class="page-heading">
+    <div><p class="section-kicker">ASSET MANAGEMENT</p><h1 class="page-title">Devices</h1><p class="page-description">Manage monitored energy and industrial IoT assets.</p></div>
+    <a class="button secondary" href="{{ url_for('pages.scan_new') }}">Run scan</a>
+  </div>
+  <section class="card form-panel" aria-labelledby="add-device-title">
+    <div class="panel-header"><div><h2 id="add-device-title">Add an inventory device</h2><p>Register a device before starting vulnerability scans.</p></div></div>
+    <form data-device-create>
+      <div class="grid grid-3">
+        <label>Device name<input name="name" required maxlength="150" autocomplete="off"></label>
+        <label>Vendor<input name="vendor" required maxlength="120" autocomplete="organization"></label>
+        <label>Model<input name="model" required maxlength="120"></label>
+        <label>Firmware version<input name="firmware_version" maxlength="120"></label>
+        <label>Asset tag<input name="asset_tag" maxlength="80"></label>
+        <label>Site<input name="site" maxlength="120"></label>
+      </div>
+      <button type="submit">Add device</button>
+      <p data-device-status role="status" aria-live="polite" hidden></p>
+    </form>
+  </section>
+  <section class="card inventory-table-panel" aria-labelledby="inventory-title">
+    <div class="panel-header">
+      <div><h2 id="inventory-title">Inventory</h2><p>{{ devices|length }} registered device{% if devices|length != 1 %}s{% endif %}</p></div>
+    </div>
+    {% if devices %}
+    <div class="table-scroll"><table class="table responsive-table devices-table">
+      <thead>
+        <tr><th>Device</th><th>Vendor</th><th>Model</th><th>Firmware version</th><th>Site</th><th>Actions</th></tr>
+      </thead>
+      <tbody>
+        {% for device in devices %}
+          {% set firmware_value = device.firmware_version if device.firmware_version is not none else device.firmware %}
+          <tr>
+            <td data-label="Device"><a href="{{ url_for('pages.device_detail', device_id=device.id) }}">{{ device.name }}</a></td>
+            <td data-label="Vendor">{{ device.vendor }}</td>
+            <td data-label="Model">{{ device.model }}</td>
+            <td data-label="Firmware">{{ firmware_value if firmware_value and firmware_value|lower != 'unknown' else 'Unknown' }}</td>
+            <td data-label="Site">{{ device.site or 'Unknown' }}</td>
+            <td data-label="Actions">
+              <a class="table-action" href="{{ url_for('pages.device_detail', device_id=device.id) }}">Manage →</a>
+              {% if current_user.is_admin %}
+                <form method="post" action="{{ url_for('pages.archive_device', device_id=device.id) }}" onsubmit="return confirm('Archive this device? Its scan history and findings will be preserved.');">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <button class="table-action" type="submit">Archive</button>
+                </form>
+                <form method="post" action="{{ url_for('pages.delete_device', device_id=device.id) }}" onsubmit="return confirm('Delete this device? Devices with scan, finding, or telemetry history cannot be deleted.');">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <button class="table-action" type="submit">Delete</button>
+                </form>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table></div>
+    {% else %}
+      <p class="empty-state">No devices are registered yet. Add one above to begin monitoring.</p>
+    {% endif %}
+  </section>
+  <script type="module" src="{{ url_for('static', filename='js/devices.js') }}"></script>
+{% endblock %}

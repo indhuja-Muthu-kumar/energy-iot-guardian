@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block content %}
+  <div class="page-heading">
+    <div><p class="section-kicker">VULNERABILITY ASSESSMENT</p><h1 class="page-title">Scans</h1><p class="page-description">Review scan history and potential device/CVE findings.</p></div>
+    <a class="button" href="{{ url_for('pages.scan_new') }}">Start a scan</a>
+  </div>
+  <section class="card" aria-label="Scan history">
+    {% if scans %}
+    <div class="table-scroll"><table class="table responsive-table scans-table">
+      <thead><tr><th>Scan ID</th><th>Device</th><th>Status</th><th>Findings</th><th>Summary</th><th>Timestamp</th><th>Details</th></tr></thead>
+      <tbody>
+        {% for scan in scans %}
+          <tr>
+            <td class="scan-id-cell" data-label="Scan ID"><a href="{{ url_for('pages.scan_detail', scan_id=scan.id) }}">#{{ scan.id }}</a></td>
+            <td class="scan-device-cell" data-label="Device">
+              {% if scan.device %}
+                <a href="{{ url_for('pages.device_detail', device_id=scan.device.id) }}">{{ scan.device.name }}</a>
+                {% if scan.device.vendor or scan.device.model %}
+                  <small>{{ scan.device.vendor or '' }}{% if scan.device.vendor and scan.device.model %} · {% endif %}{{ scan.device.model or '' }}</small>
+                {% endif %}
+                {% if scan.scan_type == 'components' %}<small>ESP32 component assessment</small>{% endif %}
+              {% else %}
+                Unknown device
+              {% endif %}
+            </td>
+            <td data-label="Status"><span class="status-pill {{ scan.status|lower }}">{{ scan.status|title }}</span></td>
+            <td data-label="Findings">{{ scan.findings|length }}</td>
+            <td class="scan-summary-cell" data-label="Summary"><span>{{ scan.summary|truncate(96, true, '…') if scan.summary else 'No summary available.' }}</span></td>
+            <td data-label="Timestamp">{{ scan.created_at.strftime('%Y-%m-%d %H:%M') if scan.created_at else '—' }}</td>
+            <td data-label="Details"><a class="table-action" href="{{ url_for('pages.scan_detail', scan_id=scan.id) }}">View details →</a></td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table></div>
+    {% else %}
+      <p class="empty-state">No scan history yet. Start a scan to assess a registered device.</p>
+    {% endif %}
+  </section>
+{% endblock %}

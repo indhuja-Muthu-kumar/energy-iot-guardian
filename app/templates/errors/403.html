@@ -1,0 +1,4 @@
+{% extends "base.html" %}
+{% block content %}
+  <section class="card error-panel" role="alert"><span class="error-code">403</span><p class="section-kicker">ACCESS CONTROL</p><h1 class="page-title">Access denied</h1><p>You are not allowed to access this page.</p><a class="button secondary" href="{{ url_for('pages.dashboard') }}">Return to dashboard</a></section>
+{% endblock %}

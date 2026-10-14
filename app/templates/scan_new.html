@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block content %}
+  <p class="section-kicker">VULNERABILITY ASSESSMENT</p>
+  <h1 class="page-title">New vulnerability scan</h1>
+  <p class="page-description">Search NVD for potential matches to a registered device or assess reported ESP32 software separately.</p>
+  <section class="card form-panel scan-launch-panel">
+    {% if devices %}
+    <form data-device-form>
+      <div class="scan-form-field">
+        <label for="device_id">Select device</label>
+        <select id="device_id" name="device_id" required>
+          {% for device in devices %}
+            <option value="{{ device.id }}">{{ device.name }} — {{ device.vendor }} {{ device.model }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <p class="form-hint">Keyword and product matches are reported as potential until applicability can be evaluated against NVD CPE/version data.</p>
+      <button type="submit"><span aria-hidden="true">⌕</span> Launch scan</button>
+      <p data-scan-status role="alert" hidden></p>
+    </form>
+    {% else %}
+      <h2>No devices available</h2>
+      <p class="empty-state">Register an active device before launching a vulnerability scan.</p>
+      <a class="button" href="{{ url_for('pages.devices') }}">Open device inventory</a>
+    {% endif %}
+  </section>
+  {% if component_device and current_user.is_admin %}
+    <section class="card form-panel scan-launch-panel">
+      <h2>ESP32 component scan</h2>
+      <p class="form-hint">Uses the latest Wokwi-reported Arduino ESP32 core and ESP-IDF versions. Versions are checked only when the NVD CPE catalog provides an exact component mapping; SMA labels are not treated as firmware.</p>
+      <form method="post" action="{{ url_for('pages.scan_components') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit">Scan reported ESP32 components</button>
+      </form>
+    </section>
+  {% endif %}
+  <script type="module" src="{{ url_for('static', filename='js/devices.js') }}"></script>
+{% endblock %}

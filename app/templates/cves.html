@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block content %}
+  <p class="section-kicker">VULNERABILITY INTELLIGENCE</p>
+  <h1 class="page-title">CVE database</h1>
+  <p class="page-description">Search the locally stored NVD CVE records used in scan results.</p>
+  <section class="card cve-search-panel">
+    <label for="cve_search">Search by CVE ID or description</label>
+    <div class="search-field"><span aria-hidden="true">⌕</span><input id="cve_search" type="search" data-cve-search autocomplete="off" placeholder="For example, CVE-2025-1234"></div>
+    <p class="form-hint">Results are loaded from the secured CVE API as you type.</p>
+    <ul data-cve-list class="cve-results" aria-live="polite"><li class="empty-state">Enter a CVE ID or keyword to search.</li></ul>
+  </section>
+  <script type="module" src="{{ url_for('static', filename='js/cves.js') }}"></script>
+{% endblock %}
