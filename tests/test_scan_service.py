@@ -1,3 +1,5 @@
+import json
+
 import requests
 import pytest
 
@@ -56,6 +58,23 @@ def test_empty_nvd_result_completes_without_creating_records(monkeypatch, device
     scan = run_scan_for_device(device_id)
 
     assert scan.status == "completed"
+    assert scan.summary.startswith(
+        "Cannot determine: firmware version not reported."
+    )
+    notes = json.loads(scan.notes)
+    assert notes["source"] == "NVD"
+    assert notes["queries"] == [
+        {
+            "query": "SMA Solar Technology Sunny Boy TL-21",
+            "query_type": "keyword",
+            "component": None,
+        }
+    ]
+    assert notes["source_urls"] == [
+        "https://services.nvd.nist.gov/rest/json/cves/2.0"
+    ]
+    assert notes["requested_at"].endswith("+00:00")
+    assert notes["retrieved_at"].endswith("+00:00")
     assert CVE.query.count() == 0
     assert Finding.query.count() == 0
 

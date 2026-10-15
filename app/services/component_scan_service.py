@@ -210,6 +210,14 @@ def run_component_scan(
 
     try:
         nvd = client or NVDClient()
+        nvd_cve_url = getattr(
+            nvd,
+            "base_url",
+            current_app.config["NVD_API_BASE"],
+        )
+        cpe_source_url = current_app.config["CPE_API_BASE"]
+        query_evidence = []
+        source_urls = [nvd_cve_url, cpe_source_url]
         findings = []
         pending_cves = {}
         assessed_components = 0
@@ -376,6 +384,16 @@ def run_component_scan(
                                 collected_at=latest.received_at,
                             )
                         )
+                    query_evidence.append(
+                        {
+                            "query": (
+                                f"Espressif {component['search_product']}"
+                            ),
+                            "query_type": "cpe_product_search",
+                            "component": component["name"],
+                            "source_url": cpe_source_url,
+                        }
+                    )
                     base_cpe = _resolve_cpe(nvd, component)
                     if base_cpe is not None:
                         state["reason"] += (
@@ -390,10 +408,19 @@ def run_component_scan(
                             firmware_version=reported_version or None,
                             firmware_verification_status=evidence_status,
                         )
-                        candidates = _fetch_all_cves(
-                            nvd,
-                            f"{component['vendor']} {component['search_product']}",
+                        keyword_query = (
+                            f"{component['vendor']} "
+                            f"{component['search_product']}"
                         )
+                        query_evidence.append(
+                            {
+                                "query": keyword_query,
+                                "query_type": "keyword",
+                                "component": component["name"],
+                                "source_url": nvd_cve_url,
+                            }
+                        )
+                        candidates = _fetch_all_cves(nvd, keyword_query)
                         for item in candidates:
                             cve_data = item.get("cve") if isinstance(item, dict) else None
                             cve_id = (
@@ -517,6 +544,14 @@ def run_component_scan(
             state["evidence_source"] = evidence_source
             state["evidence_note"] = evidence_note
 
+            query_evidence.append(
+                {
+                    "query": f"Espressif {component['search_product']}",
+                    "query_type": "cpe_product_search",
+                    "component": component["name"],
+                    "source_url": cpe_source_url,
+                }
+            )
             base_cpe = _resolve_cpe(nvd, component)
             if base_cpe is None:
                 incomplete_components.append(
@@ -541,6 +576,14 @@ def run_component_scan(
             )
             component_states.append(state)
             exact_cpe = _versioned_cpe(base_cpe, version)
+            query_evidence.append(
+                {
+                    "query": exact_cpe,
+                    "query_type": "cpe",
+                    "component": component["name"],
+                    "source_url": nvd_cve_url,
+                }
+            )
             component_target = SimpleNamespace(
                 vendor=NVD_VENDOR,
                 model=base_cpe.split(":")[4],
@@ -662,8 +705,30 @@ def run_component_scan(
             f"{incomplete_summary} Results rely on reported simulated runtime "
             "versions and NVD CPE applicability data; exploitability is not confirmed."
         )
+        firmware_version = device.firmware_version
+        if (
+            not isinstance(firmware_version, str)
+            or not firmware_version.strip()
+            or firmware_version.strip().lower()
+            in {"unknown", "not reported", "n/a"}
+        ):
+            scan.summary = (
+                "Inverter firmware: Cannot determine: firmware version not "
+                "reported. "
+                + scan.summary
+            )
+        elif (
+            (device.firmware_verification_status or "UNKNOWN").upper()
+            != "VERIFIED"
+        ):
+            scan.summary = (
+                "Inverter firmware version is not independently verified. "
+                + scan.summary
+            )
+        scan.completed_at = datetime.now(UTC).replace(tzinfo=None)
         scan.notes = json.dumps(
             {
+                "source": "NVD",
                 "device": {
                     "name": device.name,
                     "vendor": device.vendor,
@@ -679,11 +744,13 @@ def run_component_scan(
                     "telemetry_message_id": latest.source_message_id,
                 },
                 "components": component_states,
-                "source_urls": ["https://nvd.nist.gov/vuln/search"],
+                "queries": query_evidence,
+                "requested_at": scan.started_at.replace(tzinfo=UTC).isoformat(),
+                "retrieved_at": scan.completed_at.replace(tzinfo=UTC).isoformat(),
+                "source_urls": source_urls,
             },
             sort_keys=True,
         )
-        scan.completed_at = datetime.now(UTC).replace(tzinfo=None)
         db.session.commit()
     except (requests.RequestException, ValueError):
         logger.exception("NVD component scan failed for SolarGuard device %s", device.id)
@@ -694,12 +761,17 @@ def run_component_scan(
             "NVD component data could not be validated or retrieved. "
             "No partial findings were saved."
         )
-        if component_states:
-            scan.notes = json.dumps(
-                {"components": component_states},
-                sort_keys=True,
-            )
         scan.completed_at = datetime.now(UTC).replace(tzinfo=None)
+        scan.notes = json.dumps(
+            {
+                "source": "NVD",
+                "components": component_states,
+                "queries": query_evidence,
+                "requested_at": scan.started_at.replace(tzinfo=UTC).isoformat(),
+                "source_urls": source_urls,
+            },
+            sort_keys=True,
+        )
         db.session.commit()
     except Exception:
         logger.exception("Unexpected component scan failure for device %s", device.id)
@@ -707,12 +779,17 @@ def run_component_scan(
         scan = db.session.get(Scan, scan_id)
         scan.status = "failed"
         scan.summary = "An internal error interrupted the component scan."
-        if component_states:
-            scan.notes = json.dumps(
-                {"components": component_states},
-                sort_keys=True,
-            )
         scan.completed_at = datetime.now(UTC).replace(tzinfo=None)
+        scan.notes = json.dumps(
+            {
+                "source": "NVD",
+                "components": component_states,
+                "queries": query_evidence,
+                "requested_at": scan.started_at.replace(tzinfo=UTC).isoformat(),
+                "source_urls": source_urls,
+            },
+            sort_keys=True,
+        )
         db.session.commit()
     return db.session.get(Scan, scan_id)
 

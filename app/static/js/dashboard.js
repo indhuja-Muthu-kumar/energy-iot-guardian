@@ -96,17 +96,24 @@ function startDeviceTelemetry() {
   if (!panel) return;
 
   const historyBody = panel.querySelector("[data-telemetry-history]");
+  const errorMessage = panel.querySelector("[data-telemetry-error]");
+  const sessionMessage = panel.querySelector("[data-telemetry-session]");
+  const ageElement = panel.querySelector("[data-telemetry-age]");
+  const staleAfterSeconds = Number(panel.dataset.staleAfterSeconds || 10);
   const formatter = new Intl.DateTimeFormat(undefined, {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
   });
+  let lastKnownStatus = null;
+  let lastReceivedAt = null;
+  let retryDelayMs = 3000;
 
   const displayText = (selector, value) => {
     panel.querySelector(selector).textContent = String(value);
   };
 
-  function renderWaiting(message) {
+  function renderEmpty(message) {
     displayText("[data-telemetry-status]", message);
     historyBody.replaceChildren();
     const row = document.createElement("tr");
@@ -115,15 +122,81 @@ function startDeviceTelemetry() {
     cell.textContent = message;
     row.append(cell);
     historyBody.append(row);
+    displayText("[data-telemetry-voltage]", "--");
+    displayText("[data-telemetry-current]", "--");
+    displayText("[data-telemetry-power]", "--");
+    displayText("[data-telemetry-message-id]", "--");
+    ageElement.textContent = "—";
+    lastKnownStatus = null;
+    lastReceivedAt = null;
+  }
+
+  function updateAge() {
+    if (!lastReceivedAt) return;
+    const ageSeconds = Math.max(
+      0,
+      Math.floor((Date.now() - lastReceivedAt.getTime()) / 1000),
+    );
+    const age = ageSeconds < 2
+      ? "just now"
+      : `${ageSeconds} second${ageSeconds === 1 ? "" : "s"} ago`;
+    ageElement.textContent = age;
+    const stale = ageSeconds >= staleAfterSeconds;
+    if (errorMessage.hidden) {
+      displayText(
+        "[data-telemetry-status]",
+        stale && lastKnownStatus === "Online · SIMULATED"
+          ? `Stale · SIMULATED · last reading is ${age}`
+          : lastKnownStatus,
+      );
+    } else {
+      displayText(
+        "[data-telemetry-status]",
+        stale
+          ? `Stale reading · last known ${lastKnownStatus}`
+          : `Last known: ${lastKnownStatus}`,
+      );
+    }
+  }
+
+  function showBackendError(message) {
+    displayText(
+      "[data-telemetry-status]",
+      lastKnownStatus ? `Last known: ${lastKnownStatus}` : "Backend unavailable",
+    );
+    errorMessage.textContent = `${message} Retrying in ${Math.ceil(retryDelayMs / 1000)} seconds.`;
+    errorMessage.hidden = false;
+    sessionMessage.hidden = true;
+    updateAge();
+  }
+
+  function showSessionExpired() {
+    displayText(
+      "[data-telemetry-status]",
+      lastKnownStatus ? `Last known: ${lastKnownStatus}` : "Session expired",
+    );
+    errorMessage.textContent = lastReceivedAt
+      ? "Your session expired. The last received reading is retained; sign in to resume updates."
+      : "Your session expired. Sign in to view telemetry and resume updates.";
+    errorMessage.hidden = false;
+    sessionMessage.hidden = false;
+    updateAge();
   }
 
   function renderTelemetry(data) {
     if (!data.latest || !Array.isArray(data.history)) {
-      renderWaiting(data.message || "Waiting for telemetry from Wokwi.");
+      renderEmpty(
+        data.state === "archived"
+          ? "Device archived; no telemetry history is available."
+          : "No telemetry received yet.",
+      );
+      errorMessage.hidden = true;
+      sessionMessage.hidden = true;
       return;
     }
 
     const latest = data.latest;
+    lastReceivedAt = new Date(latest.received_at);
     displayText("[data-telemetry-voltage]", Number(latest.voltage).toFixed(1));
     displayText("[data-telemetry-current]", Number(latest.current).toFixed(1));
     displayText("[data-telemetry-power]", Number(latest.power).toFixed(1));
@@ -134,7 +207,10 @@ function startDeviceTelemetry() {
       demo_stale: "Local demo · stale · not live",
       archived: "Archived · history only",
     };
-    displayText("[data-telemetry-status]", stateText[data.state] || "Unknown");
+    lastKnownStatus = stateText[data.state] || "Status unknown";
+    displayText("[data-telemetry-status]", lastKnownStatus);
+    errorMessage.hidden = true;
+    sessionMessage.hidden = true;
     const sourceElement = panel.querySelector("[data-telemetry-source]");
     sourceElement.textContent = data.latest.payload_source === "local_demo"
       ? (data.latest.ingest_source === "mqtt"
@@ -161,6 +237,7 @@ function startDeviceTelemetry() {
     const receivedElement = panel.querySelector("[data-telemetry-received]");
     receivedElement.dateTime = received.toISOString();
     receivedElement.textContent = formatter.format(received);
+    updateAge();
 
     if (data.runtime) {
       displayText(
@@ -200,33 +277,47 @@ function startDeviceTelemetry() {
   }
 
   async function pollTelemetry() {
+    let nextDelay = retryDelayMs;
     try {
       const response = await fetch(panel.dataset.telemetryUrl, {
         credentials: "same-origin",
         headers: { Accept: "application/json" },
       });
       if (
+        response.status === 401 ||
         response.redirected &&
         new URL(response.url, window.location.href).pathname === "/auth/login"
       ) {
-        renderWaiting("Sign in again to resume telemetry updates.");
-        return;
+        showSessionExpired();
+      } else if (!response.ok) {
+        showBackendError(`Telemetry API returned HTTP ${response.status}.`);
+      } else if (!response.headers.get("content-type")?.includes("application/json")) {
+        showBackendError("Telemetry API returned a non-JSON response.");
+      } else {
+        renderTelemetry(await response.json());
+        retryDelayMs = 3000;
+        nextDelay = retryDelayMs;
       }
-      if (!response.ok) {
-        throw new Error(`Telemetry API returned HTTP ${response.status}.`);
-      }
-      if (!response.headers.get("content-type")?.includes("application/json")) {
-        throw new Error("Telemetry API returned a non-JSON response.");
-      }
-      renderTelemetry(await response.json());
     } catch (error) {
-      console.error("Wokwi telemetry could not be loaded.", error);
-      renderWaiting("Telemetry service unavailable; retrying…");
+      console.error("Telemetry could not be refreshed.", error);
+      showBackendError(
+        error instanceof TypeError
+          ? "Could not reach the telemetry service."
+          : "The telemetry response could not be read.",
+      );
     }
+
+    if (errorMessage.hidden && sessionMessage.hidden) {
+      retryDelayMs = 3000;
+    } else {
+      nextDelay = retryDelayMs;
+      retryDelayMs = Math.min(retryDelayMs * 2, 30000);
+    }
+    window.setTimeout(pollTelemetry, nextDelay);
   }
 
   pollTelemetry();
-  window.setInterval(pollTelemetry, 3000);
+  window.setInterval(updateAge, 1000);
 }
 
 document.addEventListener("DOMContentLoaded", () => {

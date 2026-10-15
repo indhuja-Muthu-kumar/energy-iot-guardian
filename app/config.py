@@ -9,6 +9,7 @@ load_dotenv()
 
 class Config:
     ENV = os.getenv("FLASK_ENV", "development")
+    # Development-only fallback; production startup requires an explicit key.
     SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-key")
     SQLALCHEMY_DATABASE_URI = os.getenv(
         "DATABASE_URL",

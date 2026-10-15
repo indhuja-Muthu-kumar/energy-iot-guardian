@@ -183,7 +183,7 @@
           </article>
         </section>
 
-        <section class="dashboard-panel telemetry-panel" id="telemetry" aria-labelledby="telemetry-title" data-device-telemetry data-telemetry-url="{{ url_for('api_dashboard.dashboard_telemetry') }}">
+        <section class="dashboard-panel telemetry-panel" id="telemetry" aria-labelledby="telemetry-title" data-device-telemetry data-stale-after-seconds="{{ config['TELEMETRY_STALE_AFTER_SECONDS'] }}" data-telemetry-url="{{ url_for('api_dashboard.dashboard_telemetry') }}">
           <div class="panel-heading">
             <div>
               <h2 id="telemetry-title">Simulated solar telemetry</h2>
@@ -208,11 +208,15 @@
               <strong><span data-telemetry-power>--</span><small> W</small></strong>
             </article>
             <article class="telemetry-metric telemetry-status">
-              <span>Demo status</span>
-              <strong data-telemetry-status>Waiting for telemetry</strong>
+              <span>Telemetry status</span>
+              <strong data-telemetry-status aria-live="polite">Loading telemetry…</strong>
             </article>
           </div>
-          <p class="telemetry-last-received">Last received: <time data-telemetry-received>--</time></p>
+          <p class="telemetry-last-received">Last received: <time data-telemetry-received>--</time> · <span>Last updated <span data-telemetry-age>—</span></span></p>
+          <p class="telemetry-refresh-error" data-telemetry-error role="status" hidden></p>
+          <p class="telemetry-session-expired" data-telemetry-session hidden>
+            <a href="{{ url_for('auth.login', next='/dashboard') }}">Sign in again</a>
+          </p>
           <p>Message ID: <code data-telemetry-message-id>--</code></p>
           <p>Reading time evidence: <span data-telemetry-timestamp-source>Unknown</span></p>
           <div class="telemetry-runtime">
@@ -230,7 +234,7 @@
               <table class="dashboard-table">
                 <thead><tr><th>Time</th><th>Voltage (V)</th><th>Current (A)</th><th>Power (W)</th></tr></thead>
                 <tbody data-telemetry-history>
-                  <tr><td colspan="4">Waiting for telemetry from Wokwi…</td></tr>
+                  <tr><td colspan="4">Loading telemetry…</td></tr>
                 </tbody>
               </table>
             </div>
