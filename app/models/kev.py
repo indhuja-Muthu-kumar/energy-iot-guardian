@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from app.extensions import db
 
+CISA_KEV_SOURCE = "CISA KEV"
+
 
 class KEVEntry(db.Model):
     __tablename__ = "kev_entries"
@@ -13,5 +15,9 @@ class KEVEntry(db.Model):
     short_description = db.Column(db.Text, nullable=True)
     required_action = db.Column(db.Text, nullable=True)
     due_date = db.Column(db.Date, nullable=True)
-    source = db.Column(db.String(20), default="CISA KEV")
+    source = db.Column(
+        db.String(20),
+        default=CISA_KEV_SOURCE,
+        server_default=CISA_KEV_SOURCE,
+    )
     created_at = db.Column(db.DateTime, server_default=db.func.now())

@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}Alert {{ alert.id }} | Energy-IoT CVE Monitor{% endblock %}
+{% block content %}
+  <p class="section-kicker">INCIDENT TIMELINE · ALERT #{{ alert.id }}</p>
+  <div class="page-heading">
+    <div><h1 class="page-title">{{ alert.title }}</h1><p class="page-description">{{ alert.alert_type|replace('_', ' ')|title }} · {{ alert.device.name if alert.device else 'Unknown device' }}{% if alert.cve_id %} · {{ alert.cve_id }}{% endif %}</p></div>
+    <a class="button secondary" href="{{ url_for('pages.alerts') }}">Back to alerts</a>
+  </div>
+  <section class="grid grid-3" aria-label="Alert summary">
+    <article class="card fact-card"><span>Severity</span><strong>{{ alert.severity|title }}</strong></article>
+    <article class="card fact-card"><span>Status</span><strong>{{ alert.status|replace('_', ' ')|title }}</strong></article>
+    <article class="card fact-card"><span>Created</span><strong>{{ alert.created_at.strftime('%Y-%m-%d %H:%M UTC') if alert.created_at else 'Unknown' }}</strong></article>
+  </section>
+  <section class="card">
+    <div class="panel-header"><div><h2>Evidence and recommended review</h2><p>Alert resolution is a workflow state, not proof that a vulnerability is fixed.</p></div></div>
+    <p>{{ alert.summary }}</p>
+    {% if latest_finding %}
+      <dl class="detail-list">
+        <div><dt>Assessment</dt><dd>{{ latest_finding.match_status|replace('_', ' ')|title }} · {{ latest_finding.confidence|title }} confidence</dd></div>
+        <div><dt>Finding evidence</dt><dd>{{ latest_finding.evidence or latest_finding.summary or 'No finding evidence recorded.' }}</dd></div>
+        <div><dt>Component / version</dt><dd>{{ latest_finding.component_name or 'Not identified' }} · {{ latest_finding.component_version or 'Unknown version' }}</dd></div>
+      </dl>
+    {% endif %}
+    {% if alert.device %}<p><a href="{{ url_for('pages.device_detail', device_id=alert.device.id) }}">Open device profile →</a></p>{% endif %}
+    {% if alert.cve_id %}<p><a href="{{ url_for('pages.cve_detail', cve_id=alert.cve_id) }}">Open CVE details →</a></p>{% endif %}
+  </section>
+  <section class="card">
+    <div class="panel-header"><div><h2>Update status</h2><p>Every transition is recorded with the signed-in user and timestamp.</p></div></div>
+    {% if current_user.is_admin %}
+      <div class="filter-actions">
+        {% if alert.status == 'open' %}
+          <form method="post" action="{{ url_for('pages.transition_alert', alert_id=alert.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="status" value="acknowledged"><button type="submit">Acknowledge</button></form>
+        {% elif alert.status == 'acknowledged' %}
+          <form method="post" action="{{ url_for('pages.transition_alert', alert_id=alert.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="status" value="in_progress"><button type="submit">Start work</button></form>
+        {% elif alert.status == 'in_progress' %}
+          <form method="post" action="{{ url_for('pages.transition_alert', alert_id=alert.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="status" value="resolved"><button type="submit">Resolve alert</button></form>
+        {% endif %}
+        {% if alert.status != 'open' %}
+          <form method="post" action="{{ url_for('pages.transition_alert', alert_id=alert.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="status" value="open"><button type="submit" class="button secondary">{{ 'Reopen alert' if alert.status == 'resolved' else 'Return to open' }}</button></form>
+        {% endif %}
+      </div>
+    {% else %}<p class="summary-disclaimer">Only administrators can change alert status.</p>{% endif %}
+  </section>
+  {% if current_user.is_admin %}
+    <section class="card">
+      <div class="panel-header"><div><h2>Add incident note</h2><p>Notes are appended to the timeline and do not overwrite alert evidence.</p></div></div>
+      <form method="post" action="{{ url_for('pages.add_alert_note', alert_id=alert.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <label for="incident-note">Note</label>
+        <textarea id="incident-note" name="note" required minlength="1" maxlength="2000" rows="4"></textarea>
+        <button type="submit">Add note</button>
+      </form>
+    </section>
+  {% endif %}
+  <section class="card">
+    <div class="panel-header"><div><h2>Incident timeline</h2><p>{{ timeline|length }} recorded event{% if timeline|length != 1 %}s{% endif %}</p></div></div>
+    {% if timeline %}
+      <ol class="detail-list">
+        {% for event in timeline %}
+          <li><strong>{{ event.action|replace('_', ' ')|title }}</strong><small>{{ event.created_at.strftime('%Y-%m-%d %H:%M:%S UTC') if event.created_at else 'Unknown time' }} · {{ event.user.username if event.user else 'System' }}</small>{% if event.details.note %}<p>{{ event.details.note }}</p>{% endif %}{% if event.details.from %}<p>Status: {{ event.details.from|replace('_', ' ')|title }} → {{ event.details.to|replace('_', ' ')|title }}</p>{% endif %}{% if event.details.legacy_details %}<p>{{ event.details.legacy_details }}</p>{% endif %}</li>
+        {% endfor %}
+      </ol>
+    {% else %}<p class="empty-state">No status changes or notes have been recorded yet.</p>{% endif %}
+  </section>
+{% endblock %}

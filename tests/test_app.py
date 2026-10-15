@@ -85,6 +85,12 @@ def test_scans_page_shows_device_details_and_unknown_device_fallback():
     assert "completed" in html
     assert "Scan finished." in html
     assert "Timestamp" in html
+    device_details = client.get(f"/devices/{device_id}").get_data(as_text=True)
+    assert "Run Scan" in device_details
+    assert 'data-device-form' in device_details
+    assert "Manufacturer firmware reference" in device_details
+    assert "does not verify the firmware installed on this asset" in device_details.lower()
+    assert "Selecting the PV Inverter guide" in device_details
 
 
 def test_authenticated_pages_render_inside_shared_theme_shell():
@@ -292,6 +298,10 @@ def test_scan_api_runs_nvd_query_and_creates_single_scan(monkeypatch):
     with client.session_transaction() as session:
         session["_user_id"] = "1"
         session["_fresh"] = True
+    device_profile = client.get(f"/devices/{device_id}").get_data(as_text=True)
+    assert "Run Scan" in device_profile
+    assert f'name="device_id" value="{device_id}"' in device_profile
+    assert "data-device-form" in device_profile
     token = csrf_token(client.get("/scans/new"))
 
     response = client.post(
@@ -302,6 +312,7 @@ def test_scan_api_runs_nvd_query_and_creates_single_scan(monkeypatch):
 
     assert response.status_code == 201
     assert response.json["status"] == "completed"
+    assert response.json["id"]
     assert "potential matches" in response.json["summary"]
     assert client.get("/dashboard").status_code == 200
     report = client.get("/api/reports/csv")
@@ -318,6 +329,8 @@ def test_scan_api_runs_nvd_query_and_creates_single_scan(monkeypatch):
     assert scan_page.status_code == 200
     assert b"Potential keyword match" in scan_page.data
     assert b"NVD description keyword match" in scan_page.data
+    assert b"CVE-2025-1234" in scan_page.data
+    assert b"NVD source not specified" in scan_page.data
     with app.app_context():
         empty_scan = Scan(device_id=device_id, status="completed")
         db.session.add(empty_scan)
@@ -736,6 +749,11 @@ def test_firmware_version_can_be_created_edited_and_displayed():
     device_id = created.json["id"]
     assert created.json["firmware_version"] == "2.4.1"
     assert created.json["firmware"] == "2.4.1"
+    assert created.json["firmware_verification_status"] == "REPORTED"
+    assert created.json["firmware_confidence"] == "low"
+    assert created.json["firmware_evidence_source"] == "Operator entry"
+    assert created.json["firmware_evidence_method"] == "Manual inventory entry"
+    assert created.json["firmware_evidence_collected_at"] is not None
     assert created.json["asset_tag"] == "INV-002"
     assert created.json["site"] == "Solar farm"
 
@@ -750,6 +768,16 @@ def test_firmware_version_can_be_created_edited_and_displayed():
     assert b"Firmware version" in inventory.data
     assert b"2.4.1" in inventory.data
 
+    forged_verification = client.patch(
+        f"/api/devices/{device_id}",
+        json={
+            "firmware_version": "2.5.0",
+            "firmware_verification_status": "VERIFIED",
+        },
+        headers={"X-CSRFToken": token},
+    )
+    assert forged_verification.status_code == 400
+
     updated = client.patch(
         f"/api/devices/{device_id}",
         json={
@@ -757,6 +785,9 @@ def test_firmware_version_can_be_created_edited_and_displayed():
             "vendor": "Updated Energy",
             "model": "INV-2B",
             "firmware_version": "2.5.0",
+            "firmware_evidence_source": "Authenticated device interface",
+            "firmware_evidence_method": "Read from device status page",
+            "firmware_evidence_note": "Read during authorized local inspection.",
             "asset_tag": "INV-002B",
             "site": "West field",
         },
@@ -768,9 +799,20 @@ def test_firmware_version_can_be_created_edited_and_displayed():
     assert updated.json["model"] == "INV-2B"
     assert updated.json["firmware_version"] == "2.5.0"
     assert updated.json["firmware"] == "2.5.0"
+    assert updated.json["firmware_verification_status"] == "REPORTED"
+    assert updated.json["firmware_confidence"] == "low"
+    assert updated.json["firmware_evidence_source"] == "Authenticated device interface"
+    assert updated.json["firmware_evidence_method"] == "Read from device status page"
+    assert updated.json["firmware_evidence_note"] == (
+        "Read during authorized local inspection."
+    )
     assert updated.json["asset_tag"] == "INV-002B"
     assert updated.json["site"] == "West field"
     assert b"2.5.0" in client.get(f"/devices/{device_id}").data
+    assert b"REPORTED" in client.get(f"/devices/{device_id}").data
+    assert b"not independently verify product firmware" in client.get(
+        f"/devices/{device_id}"
+    ).data
 
     invalid_update = client.patch(
         f"/api/devices/{device_id}",
@@ -794,6 +836,8 @@ def test_firmware_version_can_be_created_edited_and_displayed():
     assert unknown.status_code == 201
     assert unknown.json["firmware_version"] is None
     assert unknown.json["firmware"] == "unknown"
+    assert unknown.json["firmware_verification_status"] == "UNKNOWN"
+    assert unknown.json["firmware_confidence"] == "none"
     assert b"Unknown" in client.get(
         f"/devices/{unknown.json['id']}"
     ).data
@@ -964,8 +1008,10 @@ def test_scan_records_nvd_cpe_version_match_without_claiming_device_verification
     assert response.status_code == 201
     with app.app_context():
         finding = Finding.query.one()
-        assert finding.matched_by == "nvd-cpe-version-range"
+        assert finding.match_status == "potential"
+        assert finding.matched_by == "nvd-cpe-product-potential"
         assert "1.5.0" in finding.evidence
-        assert "not independently verified" in finding.evidence
+        assert "not verified" in finding.evidence
+        assert "cannot be confirmed or ruled out" in finding.evidence
     scan_page = client.get(f"/scans/{response.json['id']}")
-    assert b"NVD CPE/version match" in scan_page.data
+    assert b"Potential CPE product match" in scan_page.data

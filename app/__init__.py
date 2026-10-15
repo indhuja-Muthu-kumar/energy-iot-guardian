@@ -138,6 +138,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         from app.models.audit import AuditLog  # noqa: F401
         from app.models.cve import CVE  # noqa: F401
         from app.models.device import Device  # noqa: F401
+        from app.models.device_component import DeviceComponent  # noqa: F401
         from app.models.finding import Finding  # noqa: F401
         from app.models.kev import KEVEntry  # noqa: F401
         from app.models.patch import PatchCandidate  # noqa: F401
@@ -148,13 +149,30 @@ def create_app(test_config: dict | None = None) -> Flask:
 
         db.create_all()
         from app.db_migrations import (
+            ensure_firmware_evidence_columns,
             ensure_firmware_version_column,
+            ensure_device_component_schema,
             ensure_telemetry_columns,
+            ensure_telemetry_device_id_column,
         )
 
         ensure_firmware_version_column()
+        ensure_firmware_evidence_columns()
+        ensure_device_component_schema()
         ensure_telemetry_columns()
-        print("Database initialized.")
+        ensure_telemetry_device_id_column(
+            app.config["TELEMETRY_DEVICE_ID"],
+            app.config["TELEMETRY_DEVICE_VENDOR"],
+            app.config["TELEMETRY_DEVICE_MODEL"],
+        )
+        from app.services.device_bootstrap import ensure_arduino_uno_device
+
+        device = ensure_arduino_uno_device()
+        print(
+            "Database initialized. "
+            f"{device.name} is ready as device ID {device.id}; unverified "
+            "software versions remain unknown."
+        )
 
 
     @app.cli.command("setup-wokwi-device")
@@ -175,10 +193,14 @@ def create_app(test_config: dict | None = None) -> Flask:
                 app.config["TELEMETRY_DEVICE_VENDOR"],
                 app.config["TELEMETRY_DEVICE_MODEL"],
             )
-            if (device.vendor, device.model) != expected_identity:
+            legacy_identity = (
+                device.vendor == "SMA Solar Technology"
+                and device.model == "Sunny Boy TL-21"
+            )
+            if (device.vendor, device.model) != expected_identity and not legacy_identity:
                 raise ClickException(
-                    "The existing SolarGuard-01 record has different vendor/"
-                    "model labels. No records were changed."
+                    "The existing SolarGuard-01 record has conflicting "
+                    "manufacturer/model metadata. No records were changed."
                 )
             if device.status == ARCHIVED_DEVICE_STATUS:
                 raise ClickException(
@@ -186,24 +208,97 @@ def create_app(test_config: dict | None = None) -> Flask:
                     "changed; have an administrator explicitly restore it or "
                     "resolve the archived record before setup."
                 )
+            assigned_device = Device.query.filter_by(
+                telemetry_device_id=app.config["TELEMETRY_DEVICE_ID"]
+            ).first()
+            if assigned_device is not None and assigned_device.id != device.id:
+                raise ClickException(
+                    "The SolarGuard-01 identifier is already assigned to another "
+                    "inventory record. No records were changed."
+                )
+            if device.telemetry_device_id not in (
+                None,
+                app.config["TELEMETRY_DEVICE_ID"],
+            ):
+                raise ClickException(
+                    "The SolarGuard-01 inventory record has a conflicting stable "
+                    "telemetry identifier. No records were changed."
+                )
+            if device.telemetry_device_id is None:
+                device.telemetry_device_id = app.config["TELEMETRY_DEVICE_ID"]
+            device.simulation_status = "simulated"
+            device.vendor, device.model = expected_identity
+            has_version_evidence = (
+                device.firmware_verification_status == "VERIFIED"
+                and bool(device.firmware_version or device.firmware)
+                and bool(device.firmware_evidence_source)
+                and bool(device.firmware_evidence_method)
+            )
+            if legacy_identity:
+                migration_note = (
+                    "Legacy inventory labels identified an SMA Sunny Boy TL-21 "
+                    "scenario; this record now identifies the simulated ESP32. "
+                    "No SMA firmware value is treated as ESP32 firmware."
+                )
+                if migration_note not in (device.notes or ""):
+                    device.notes = (
+                        f"{device.notes.rstrip()}\n{migration_note}".strip()
+                        if device.notes
+                        else migration_note
+                    )
+            if legacy_identity or not has_version_evidence:
+                device.firmware = "unknown"
+                device.firmware_version = None
+                device.firmware_evidence_source = None
+                device.firmware_evidence_method = None
+                device.firmware_evidence_note = None
+                device.firmware_evidence_collected_at = None
+                device.firmware_verification_status = "UNKNOWN"
+                device.firmware_confidence = "none"
+            from app.services.device_bootstrap import ensure_solar_guard_components
+
+            ensure_solar_guard_components(device)
+            db.session.commit()
             print(f"SolarGuard-01 already exists as active device ID {device.id}.")
             return
 
         device = Device(
             name=app.config["TELEMETRY_DEVICE_ID"],
+            telemetry_device_id=app.config["TELEMETRY_DEVICE_ID"],
             vendor=app.config["TELEMETRY_DEVICE_VENDOR"],
             model=app.config["TELEMETRY_DEVICE_MODEL"],
             firmware="unknown",
             firmware_version=None,
+            simulation_status="simulated",
             status="active",
             notes=(
-                "Simulated solar asset metadata for the Wokwi ESP32 demo; "
-                "not verified as SMA inverter hardware."
+                "Simulated Espressif ESP32 development board for a solar-monitoring "
+                "scenario. No physical SMA inverter is connected. Application "
+                "sketch, build toolchain, and bootloader versions remain unknown "
+                "unless separately evidenced."
             ),
         )
         db.session.add(device)
-        db.session.commit()
+        db.session.flush()
+        from app.services.device_bootstrap import ensure_solar_guard_components
+
+        ensure_solar_guard_components(device)
         print(f"Registered SolarGuard-01 as active device ID {device.id}.")
+
+
+    @app.cli.command("setup-sma-reference-device")
+    def setup_sma_reference_device_cmd():
+        from app.services.device_bootstrap import ensure_sma_firmware_reference_device
+
+        try:
+            device = ensure_sma_firmware_reference_device()
+        except RuntimeError as error:
+            raise ClickException(str(error)) from error
+        print(
+            "SMA firmware reference inventory is ready as device ID "
+            f"{device.id}; 2.60.03.R is documented reference data, not "
+            "installed firmware."
+        )
 
 
     @app.cli.command("telemetry-worker")

@@ -16,12 +16,18 @@ def make_device(
     firmware_version=None,
     vendor="SMA Solar Technology",
     model=DEVICE_MODEL,
+    firmware_verification_status=None,
 ):
+    attributes = {
+        "vendor": vendor,
+        "model": model,
+        "firmware": firmware,
+        "firmware_version": firmware_version,
+    }
+    if firmware_verification_status is not None:
+        attributes["firmware_verification_status"] = firmware_verification_status
     return SimpleNamespace(
-        vendor=vendor,
-        model=model,
-        firmware=firmware,
-        firmware_version=firmware_version,
+        **attributes,
     )
 
 
@@ -76,6 +82,49 @@ def test_firmware_in_numeric_range_matches_nvd_criterion():
     assert result is not None
     assert result[0] == "affected"
     assert "not independently verified" in result[1]
+
+
+def test_reported_firmware_in_range_remains_potential():
+    result = assess_cpe_match(
+        make_device(
+            firmware_version="1.5.0",
+            firmware_verification_status="REPORTED",
+        ),
+        make_cve(make_criterion(versionStartIncluding="1.0", versionEndIncluding="2.0")),
+    )
+
+    assert result is not None
+    assert result[0] == "potential"
+    assert "not verified" in result[1]
+    assert "cannot be confirmed or ruled out" in result[1]
+
+
+def test_unverified_out_of_range_firmware_does_not_exclude_candidate():
+    result = assess_cpe_match(
+        make_device(
+            firmware_version="2.1.0",
+            firmware_verification_status="REPORTED",
+        ),
+        make_cve(make_criterion(versionStartIncluding="1.0", versionEndIncluding="2.0")),
+    )
+
+    assert result is not None
+    assert result[0] == "potential"
+    assert "appears outside" in result[1]
+    assert "cannot be confirmed or ruled out" in result[1]
+
+
+def test_verified_firmware_can_be_evaluated_against_nvd_range():
+    result = assess_cpe_match(
+        make_device(
+            firmware_version="1.5.0",
+            firmware_verification_status="VERIFIED",
+        ),
+        make_cve(make_criterion(versionStartIncluding="1.0", versionEndIncluding="2.0")),
+    )
+
+    assert result is not None
+    assert result[0] == "affected"
 
 
 def test_firmware_outside_numeric_range_is_not_affected_by_that_criterion():

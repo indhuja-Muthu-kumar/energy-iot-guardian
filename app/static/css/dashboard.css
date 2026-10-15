@@ -262,6 +262,18 @@
 .timestamp { color: #aab4c3 !important; white-space: nowrap; }
 .activity-side { display: grid; grid-template-rows: 1fr auto; gap: 11px; }
 .risk-panel, .alerts-panel { padding: 13px 14px; }
+.workflow-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 11px; }
+.workflow-panel { min-width: 0; padding: 13px 14px; }
+.workflow-list, .activity-list { display: grid; gap: 7px; margin: 9px 0 0; padding: 0; list-style: none; }
+.workflow-list > li, .activity-list > li { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 9px; padding: 8px; border: 1px solid #1e2938; border-radius: 6px; background: rgba(255,255,255,.018); }
+.workflow-list > li > div:first-child, .activity-list > li > div:first-child { min-width: 0; }
+.workflow-list strong, .activity-list strong { display: block; overflow-wrap: anywhere; color: #e1e6ef; font-size: 9px; font-weight: 550; }
+.workflow-list small, .activity-list small { display: block; margin-top: 3px; color: var(--dash-muted); font-size: 8px; line-height: 1.4; overflow-wrap: anywhere; }
+.workflow-actions { display: flex; flex: 0 0 auto; flex-wrap: wrap; gap: 4px; }
+.workflow-actions form { margin: 0; }
+.workflow-actions .button { padding: 5px 7px; font-size: 8px; }
+.activity-event-meta { display: grid; flex: 0 0 auto; justify-items: end; gap: 4px; }
+.activity-event-meta time { color: #8995a7; font-size: 7px; white-space: nowrap; }
 .risk-list { display: grid; gap: 6px; }
 .risk-list li { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 7px; border: 1px solid #1e2938; border-radius: 6px; background: rgba(255,255,255,.018); }
 .risk-device-icon { display: grid; width: 27px; height: 27px; place-items: center; border: 1px solid #313d4e; border-radius: 5px; background: #182230; color: #adb9ca; font-size: 14px; }
@@ -312,6 +324,8 @@
   .inventory-panel { grid-column: auto; }
   .activity-grid { grid-template-columns: minmax(0, 1fr); }
   .activity-side { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-rows: auto; }
+  .workflow-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .workflow-panel:last-child { grid-column: 1 / -1; }
 }
 
 @media (max-width: 560px) {
@@ -338,6 +352,8 @@
   .overview-grid { grid-template-columns: minmax(0, 1fr); }
   .trend-panel, .inventory-panel { grid-column: auto; }
   .activity-side { grid-template-columns: minmax(0, 1fr); }
+  .workflow-grid { grid-template-columns: minmax(0, 1fr); }
+  .workflow-panel:last-child { grid-column: auto; }
   .scans-panel { padding: 12px 10px; }
   .dashboard-table { min-width: 570px; }
   .energy-footer { min-height: 40px; font-size: 7px; letter-spacing: 1.5px; }

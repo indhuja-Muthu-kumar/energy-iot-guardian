@@ -73,22 +73,57 @@ and sign in with the administrator credentials created by the CLI. The app also
 supports SQLite by default when `DATABASE_URL` is omitted, but MySQL is the
 documented local setup.
 
-When upgrading an existing database after pulling a schema update, run
-`flask --app app init-db`. This idempotently adds the nullable
-`firmware_version` column and copies over known values from the existing
-`firmware` column; unknown and empty values remain unknown. Existing database
-rows are retained.
+When upgrading an existing database after pulling a schema update, first make
+a backup, then run `flask --app app init-db`. This additive, idempotent command
+preserves existing rows and adds the nullable `firmware_version` and firmware
+evidence fields. Older known firmware values are retained as `REPORTED` with
+low confidence and an unknown collection time; legacy data is not promoted to
+verified. New operator-entered values are also `REPORTED` with low confidence.
+The evidence source, method, note and server-side collection time are stored
+separately from the version. A reported version or firmware value from the ESP32
+does not independently verify the product firmware.
+The same command now additively creates the component-evidence table and
+simulation-status field, then idempotently registers
+`ArduinoUno-SecurityLab-01` if it is absent. The device is labeled
+`Arduino Uno (revision unknown)` with unknown simulation state. Its board
+documentation is only a reference; sketch, framework, microcontroller, and
+bootloader evidence remain explicitly not assessed unless collected from the
+actual asset. The SMA `2.60.03.R` reference is kept only on the separately
+labelled SMA reference inventory; a legacy copy on the Uno is cleared to
+Unknown because it is not Arduino firmware evidence. The repository's
+PlatformIO target is the separate Wokwi ESP32, so those ESP32 build versions
+are never copied onto the Uno.
+
+From an authenticated device profile, **Run Scan** uses the saved identity and
+component evidence, queries NVD, records scan/CVE/finding/alert records, and
+creates review-only remediation candidates only when NVD returns an HTTPS
+reference tagged `Vendor Advisory`. Such a link is a review lead, not a
+verified fixed version; no installer or firmware flasher is run. Repeated
+scans preserve separate scan history while de-duplicating repeated CVE entries
+within one scan and reusing the same remediation candidate and alert.
 
 ### Wokwi simulated telemetry
 
-The Wokwi sketch is in the existing `wowki/` directory. Its
-`libraries.txt` installs PubSubClient, and `sketch.ino` publishes simulated
-JSON readings to the configured MQTT topic every three seconds. The default
+The hosted Wokwi project at
+<https://wokwi.com/projects/477868883321291777> is a separate copy and does not
+automatically synchronize with this repository. Before a live demo, compare its
+**sketch.ino**, **diagram.json**, **libraries.txt**, and **ack_state.h** with the
+checked-in files and update the hosted project if they differ. A public project
+URL does not send data to Flask until the simulation is started. The checked-in
+sketch connects to Wi-Fi and publishes simulated JSON readings to MQTT every
+three seconds; its Serial Monitor output is not proof of delivery.
+
+The default
 broker is `test.mosquitto.org`, port `1883`; it is a public, unauthenticated
-demonstration broker. Do not publish credentials, personal information, or
-other sensitive data to it. Broker hostname, port, topic, and optional
+demonstration broker. The public Wokwi source and public MQTT broker do not
+authenticate the publisher: another user could observe or inject messages on
+the topic. Use only non-sensitive demo telemetry. Do not use these messages as
+trusted physical-device measurements or expose a production service through
+this broker. Do not publish credentials, personal information, or other
+sensitive data to it. Broker hostname, port, topic, and optional
 subscriber credentials/TLS are configurable with `TELEMETRY_MQTT_BROKER_HOST`,
 `TELEMETRY_MQTT_BROKER_PORT`, `TELEMETRY_MQTT_TOPIC`,
+`TELEMETRY_MQTT_ACK_TOPIC`,
 `TELEMETRY_MQTT_USERNAME`, `TELEMETRY_MQTT_PASSWORD`, and
 `TELEMETRY_MQTT_TLS`. The topic must match the `MQTT_TELEMETRY_TOPIC` macro
 near the top of `wowki/sketch.ino`; change both settings together if you
@@ -108,6 +143,32 @@ the C/C++ extension obtains the real header paths from PlatformIO rather than
 using manually guessed include directories. No packages are installed by
 these project configuration files alone.
 
+The sketch starts Wi-Fi asynchronously, times out an attempt after 10 seconds,
+and backs off retries up to 60 seconds. MQTT reconnect attempts are similarly
+backed off; the WiFiClient transport connect and PubSubClient socket response
+timeouts are each three seconds. PubSubClient's synchronous connect call can
+briefly occupy the loop, but it does not wait indefinitely. Telemetry is
+published at QoS 0 with retain disabled;
+the device subscribes to acknowledgements at QoS 1, and Flask publishes its
+storage-result acknowledgement at QoS 1 with retain disabled. PubSubClient's
+default clean session is used. A successful publish only means the MQTT client
+accepted the message for sending; the matching `stored` acknowledgement is the
+application-level confirmation that Flask committed it.
+
+The firmware uses device UTC when available. If UTC is not synchronized, it
+sends a null `timestamp`, `timestamp_source: "uptime"`, and its 32-bit uptime
+counter. Flask timestamps that record at receipt and stores that provenance
+separately, so a missing NTP response no longer blocks telemetry or masquerades
+uptime as a calendar timestamp. The dashboard/API expose the message ID and
+timestamp evidence. The public broker and public Wokwi project are not
+authenticated production channels.
+
+The firmware includes `wowki/ack_state.h` for acknowledgement-state checks.
+Keep this header beside `sketch.ino` in both the local PlatformIO project and
+the hosted Wokwi project. The host-side acknowledgement-state test runs with
+`pytest tests/test_firmware_ack_state.py` when a native C++ compiler is
+available.
+
 In PowerShell, install the updated requirements, apply the additive schema
 changes, and register the one demo asset idempotently:
 
@@ -115,13 +176,23 @@ changes, and register the one demo asset idempotently:
 .\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
 .\.venv\Scripts\python.exe -m flask --app app init-db
 .\.venv\Scripts\python.exe -m flask --app app setup-wokwi-device
+.\.venv\Scripts\python.exe -m flask --app app setup-sma-reference-device
 ```
 
 Keep the existing database file. `init-db` creates the new telemetry table
 and adds telemetry/CVE metadata columns to existing tables (using defaults
-where required); it does not reset or delete devices, scans, findings, or users. The setup command
-reuses a matching active SolarGuard-01 record and refuses conflicting or
-archived records instead of silently modifying them.
+where required), records MQTT transport separately from the payload's
+`wokwi_simulation` / `local_demo` source (`unknown` for older messages),
+records timestamp provenance and optional device uptime (`unknown` / null for
+older messages), and adds the nullable unique `telemetry_device_id` field.
+If exactly one existing SolarGuard-01 row matches its configured simulated
+ESP32 vendor and model, the migration associates the stable telemetry ID with
+that row; other inventory rows remain unassigned. `setup-wokwi-device`
+reclassifies the known legacy SMA demo labels as the simulated Espressif ESP32
+while preserving telemetry, scans, findings, and users. It refuses conflicting
+or archived records instead of silently modifying them.
+`setup-sma-reference-device` updates the existing test/reference record
+idempotently; it will not merge that reference with SolarGuard-01.
 
 Run the subscriber and web app in two separate PowerShell windows:
 
@@ -149,6 +220,46 @@ before storage; duplicate message IDs are ignored. Archived device history
 remains in the database and can still be viewed, but archived devices cannot
 receive live readings or be scanned.
 
+#### Application-level storage acknowledgement
+
+The device publishes telemetry to
+`energy-iot-cve-monitor/<wokwi-project-id>/<device-id>/telemetry`; the Flask
+subscriber sends the corresponding response to the separate
+`.../telemetry/ack` topic. `TELEMETRY_MQTT_ACK_TOPIC` configures the subscriber
+topic and should match `MQTT_ACK_TOPIC` in the sketch. Each event has a random
+boot identifier plus sequence number, schema version, device ID, simulation
+source label and device timestamp. The source label is payload metadata, not
+proof of publisher identity. The ESP32 keeps one event pending and
+retries that exact payload and ID if it does not receive a response, using an
+eight-second acknowledgement timeout and capped retry backoff.
+
+The worker sends its acknowledgement only after validation and the database
+transaction succeeds. The versioned response includes event type, message ID,
+device ID, outcome (`stored`, `rejected`, or `retry`), reason, duplicate flag
+and server processing time. A repeated already-committed event is acknowledged
+as stored but is not inserted again. A database failure produces a `retry`
+outcome, never a storage confirmation. A rejection is terminal for that event;
+inspect its reason before correcting the sketch or server.
+
+An MQTT publish result only tells the local MQTT client whether it accepted a
+packet; it does not prove that the subscriber received it. The application
+acknowledgement indicates that the worker reports a committed database write,
+but a public, unauthenticated broker can expose, inject, delay or forge both
+telemetry and acknowledgements. Correlation IDs match replies to pending
+events; they do **not** authenticate senders, prevent forgery, or make
+public-broker telemetry trustworthy. The ESP32 ignores malformed or wrong-type
+acknowledgements and wrong device/message IDs. A matching `stored`
+acknowledgement confirms storage whether `duplicate` is false (new insert) or
+true (the ID was already committed). Once that ID is completed, later
+acknowledgements for it are ignored and identified as repeats; they cannot
+complete a newer pending event. Retries reuse the original pending payload and
+message ID, with capped backoff for storage retries and immediate retry after a
+successful reconnect.
+
+For production, use MQTT over TLS, authenticated per-device clients, strict
+publish/subscribe topic ACLs, protected credentials and message
+authenticity/integrity controls. Never put secrets in the public Wokwi sketch.
+
 If the public broker or Wokwi is unavailable, create one clearly marked local
 sample using the existing validation and database pipeline:
 
@@ -164,7 +275,7 @@ Troubleshooting:
 
 - Confirm the ESP32 and subscriber use the same broker host, port, and exact
   topic. The defaults are `test.mosquitto.org:1883` and
-  `energy-iot-cve-monitor/477780562303197185/SolarGuard-01/telemetry`.
+  `energy-iot-cve-monitor/477868883321291777/SolarGuard-01/telemetry`.
 - Start `telemetry-worker` before the Wokwi simulation. Check its logs for a
   broker subscription acknowledgement, then check for accepted or rejected
   telemetry messages.
@@ -174,16 +285,54 @@ Troubleshooting:
   `telemetry-demo` to present dashboard/database functionality when they are
   unavailable, and keep the data visibly labeled as local simulation.
 
-The asset vendor/model are descriptive simulation labels, not proof of SMA
-hardware. The reported Arduino ESP32 core and ESP-IDF versions are shown as
-ESP32 runtime information, separate from inverter firmware. An administrator
-can run an ESP32 component scan from the new-scan page after telemetry arrives.
-It uses the latest reported versions and only evaluates components for which
-NVD provides an exact CPE identity and version applicability data. Unmapped
-components are called out as incomplete; potential, indeterminate, affected
-version, and not-applicable results remain distinct. The ordinary vendor/model
-scan is intentionally blocked for SolarGuard-01 to avoid treating the
-descriptive SMA label as verified inverter software.
+SolarGuard-01 is an Espressif ESP32 development-board simulation for a
+solar-monitoring scenario; the represented SMA inverter is not connected and
+its exact model and installed firmware are unknown. The application sketch
+version, bootloader version, and exact PlatformIO/compiler toolchain version
+are also unknown because no versioned sketch build, bootloader readout, or
+pinned toolchain build evidence is present. Runtime-reported Arduino-ESP32 core
+and ESP-IDF versions are tracked separately from application firmware. They
+come over unauthenticated simulated MQTT, so matching CVEs remain potential
+candidates rather than confirmed physical-device findings.
+
+SMA's official off-grid inverter guide specifies firmware **2.60.03.R or
+higher** for SB 3000TL-21, SB 3600TL-21, SB 4000TL-21, SB 5000TL-21, and
+SB 6000TL-21. The reference inventory stores each exact model/version pair as
+`REFERENCE` evidence, not installed firmware. The guide does not identify which
+exact variant, if any, the SolarGuard scenario represents. See the
+[official SMA compatibility table](https://manuals.sma.de/OffGridSystem-PL/en-US/1862614539.html).
+For inventory scans, an unverified version within an NVD range remains a
+potential candidate, and an unverified version outside the range cannot rule
+out applicability. No matching CVEs does not prove a device is secure.
+Administrators can run the ESP32 component scan after telemetry arrives.
+
+Device-profile contextual priorities are separate from CVSS severity. An
+evaluated affected finding in the stored CISA KEV catalog is `CRITICAL`;
+unresolved applicability with a KEV listing is `HIGH`. Without a KEV listing,
+evaluated matches retain their severity band, while potential/indeterminate
+matches are lowered one band (critical to high, high to medium, medium to low).
+Unknown severity and score require `REVIEW`, not a low-risk conclusion, and
+not-applicable findings are labeled `NOT PRIORITIZED` while their history is
+retained. These rules do not yet include device criticality or measured network
+exposure. KEV labels reflect the locally stored catalog; a missing listing is
+not proof that a CVE is absent from a fresh catalog.
+
+Telemetry checks use configurable demonstration ceilings (280 V, 20 A, and
+3500 W by default) that are not manufacturer operating limits. Exceedances are
+saved as grouped, medium-severity telemetry alerts in the same database
+transaction as the reading. Alert text identifies the demo rule and explicitly
+states that it is not evidence of a physical equipment fault. Repeated
+exceedances for one device/measurement update the existing open alert rather
+than creating an unbounded stream of duplicate alerts.
+It uses the latest reported versions and evaluates version applicability only
+when the component has a usable version and exact NVD CPE identity. If the
+version is missing or unsupported, an exact NVD product/CPE match may still
+produce potential or indeterminate candidates; the component remains
+not-assessed, and a keyword hit alone is never a confirmed match. Unmapped
+components are called out as incomplete; potential, indeterminate,
+affected-version, and not-applicable results remain distinct. The ordinary
+vendor/model scan is intentionally blocked for SolarGuard-01 to avoid treating
+the descriptive SMA label as verified inverter software.
 
 ### Docker Compose
 
@@ -225,6 +374,25 @@ The database setup SQL file creates only the database; Compose creates its
 application account from the environment variables instead of a stored
 password.
 
+## Dashboard review and remediation
+
+The dashboard's open-alert count includes only alerts whose current status is
+`open`; acknowledged, in-progress, resolved, and rejected records are excluded.
+Each listed open alert links to its saved detail page.
+
+“Awaiting review” counts only patch candidates in the `discovered` state.
+Administrators can approve or reject discovered simulated candidates. These
+actions record workflow state; approval does not install a patch, and
+verification of a simulated candidate is not evidence that a real device was
+updated. Rejection is recorded in the audit log. Non-simulated candidates must
+be reviewed through their recorded source evidence; this application does not
+perform vendor patch installation.
+
+Recent activity is assembled from saved scans, NVD/CISA KEV sync attempts,
+telemetry readings, security alerts, and remediation candidates. It shows
+recorded timestamps and statuses, including failed sync attempts. Telemetry
+records marked simulated remain labeled as simulated.
+
 ## Data sources
 
 The scan endpoint queries NVD CVE 2.0 by vendor and model, including every
@@ -236,11 +404,18 @@ reported as potential or indeterminate rather than confirmed. A device CPE
 match still cannot independently verify the real device identity or prove
 exploitability.
 
-The app does not treat missing firmware as either vulnerable or safe.
+The app does not treat missing firmware as either vulnerable or safe. Findings
+include the NVD detail URL and the available CPE applicability reasoning.
 `NVD_API_KEY` is optional and can be set in `.env` to increase NVD request
 limits. CISA KEV entries are loaded separately with
 `flask --app app sync-kev`; KEV membership is not yet used to confirm scan
-findings.
+findings. A KEV label is shown only for entries attributed to the CISA KEV
+source. Successful and failed KEV refresh attempts are recorded in
+`sync_logs`, and the dashboard reports the age of the last successful fetch.
+The current importer upserts entries but does not remove entries missing from
+a newer feed, so a recent fetch timestamp does not prove the stored KEV set is
+fully reconciled with CISA's current catalog. Treat KEV membership as stored
+catalog evidence, not proof of current status.
 
 ## Windows tests
 

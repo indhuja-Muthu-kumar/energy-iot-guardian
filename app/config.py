@@ -30,7 +30,15 @@ class Config:
     )
     TELEMETRY_MQTT_TOPIC = os.getenv(
         "TELEMETRY_MQTT_TOPIC",
-        "energy-iot-cve-monitor/477780562303197185/SolarGuard-01/telemetry",
+        "energy-iot-cve-monitor/477868883321291777/SolarGuard-01/telemetry",
+    )
+    TELEMETRY_MQTT_ACK_TOPIC = os.getenv(
+        "TELEMETRY_MQTT_ACK_TOPIC",
+        f"{TELEMETRY_MQTT_TOPIC}/ack",
+    )
+    TELEMETRY_MQTT_CLIENT_ID = os.getenv(
+        "TELEMETRY_MQTT_CLIENT_ID",
+        "energy-iot-cve-monitor",
     )
     TELEMETRY_MQTT_USERNAME = os.getenv("TELEMETRY_MQTT_USERNAME", "")
     TELEMETRY_MQTT_PASSWORD = os.getenv("TELEMETRY_MQTT_PASSWORD", "")
@@ -39,10 +47,17 @@ class Config:
         "false",
     ).strip().lower() in {"1", "true", "yes"}
     TELEMETRY_STALE_AFTER_SECONDS = 10
+    TELEMETRY_ACK_TIMEOUT_SECONDS = 8
     TELEMETRY_HISTORY_LIMIT = 12
+    INTELLIGENCE_STALE_AFTER_SECONDS = 86400
+    TELEMETRY_DEMO_THRESHOLDS = {
+        "voltage": {"maximum": 280.0, "unit": "V"},
+        "current": {"maximum": 20.0, "unit": "A"},
+        "power": {"maximum": 3500.0, "unit": "W"},
+    }
     TELEMETRY_DEVICE_ID = "SolarGuard-01"
-    TELEMETRY_DEVICE_VENDOR = "SMA Solar Technology"
-    TELEMETRY_DEVICE_MODEL = "Sunny Boy TL-21"
+    TELEMETRY_DEVICE_VENDOR = "Espressif"
+    TELEMETRY_DEVICE_MODEL = "ESP32 development board (Wokwi esp32dev target)"
     JSON_SORT_KEYS = False
 
 

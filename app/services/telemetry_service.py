@@ -11,6 +11,7 @@ from flask import current_app
 from sqlalchemy.exc import IntegrityError
 
 from app.extensions import db
+from app.models.alert import SecurityAlert
 from app.models.device import ARCHIVED_DEVICE_STATUS, Device
 from app.models.telemetry import TelemetryReading
 
@@ -25,6 +26,41 @@ class TelemetryValidationError(ValueError):
 
 class TelemetryDeviceError(ValueError):
     pass
+
+
+def _record_demo_threshold_alerts(device: Device, payload: dict) -> None:
+    thresholds = current_app.config["TELEMETRY_DEMO_THRESHOLDS"]
+    for field, threshold in thresholds.items():
+        measured = payload[field]
+        maximum = threshold["maximum"]
+        if measured <= maximum:
+            continue
+
+        key = f"telemetry:{device.id}:{field}_above_demo_limit"
+        summary = (
+            f"DEMONSTRATION RULE: simulated {field} measured {measured:g} "
+            f"{threshold['unit']}, above the configured demo limit "
+            f"{maximum:g} {threshold['unit']} at "
+            f"{payload['received_at'].isoformat()} UTC. This is a simulated-data "
+            "threshold alert, not evidence of a physical equipment fault."
+        )
+        alert = SecurityAlert.query.filter_by(dedupe_key=key).first()
+        if alert is None:
+            alert = SecurityAlert(
+                device_id=device.id,
+                cve_id=None,
+                alert_type="telemetry",
+                severity="medium",
+                title=f"Simulated telemetry {field} threshold exceeded",
+                summary=summary,
+                dedupe_key=key,
+                source="telemetry",
+            )
+            db.session.add(alert)
+        else:
+            alert.summary = summary
+            alert.status = "open"
+            alert.acknowledged_at = None
 
 
 def _required_text(payload: dict, field: str, max_length: int) -> str:
@@ -56,6 +92,18 @@ def validate_telemetry_payload(raw: bytes | str, received_at: datetime) -> dict:
         raise TelemetryValidationError("Telemetry message is not valid JSON.") from error
     if not isinstance(payload, dict):
         raise TelemetryValidationError("Telemetry message must be a JSON object.")
+    schema_version = payload.get("schema_version")
+    if (
+        isinstance(schema_version, bool)
+        or not isinstance(schema_version, int)
+        or schema_version != 1
+    ):
+        raise TelemetryValidationError("schema_version must be integer 1.")
+    if (
+        "message_type" in payload
+        and payload["message_type"] != "telemetry_with_runtime_info"
+    ):
+        raise TelemetryValidationError("message_type is not supported.")
 
     device_id = _required_text(payload, "device_id", 80)
     if device_id != current_app.config["TELEMETRY_DEVICE_ID"]:
@@ -69,6 +117,10 @@ def validate_telemetry_payload(raw: bytes | str, received_at: datetime) -> dict:
         raise TelemetryValidationError("Simulated asset metadata did not match.")
     if payload.get("telemetry_status") != "SIMULATED":
         raise TelemetryValidationError("Telemetry must be labelled SIMULATED.")
+    if payload.get("source") not in {"wokwi_simulation", "local_demo"}:
+        raise TelemetryValidationError(
+            "source must identify the simulation source."
+        )
 
     message_id = _required_text(payload, "message_id", 80)
     if not MESSAGE_ID_PATTERN.fullmatch(message_id):
@@ -91,17 +143,53 @@ def validate_telemetry_payload(raw: bytes | str, received_at: datetime) -> dict:
     if abs(calculated_power - numeric_values["power"]) > max(2.0, calculated_power * 0.03):
         raise TelemetryValidationError("power does not agree with voltage × current.")
 
-    timestamp_value = _required_text(payload, "timestamp", 40)
-    try:
-        timestamp = datetime.fromisoformat(timestamp_value.replace("Z", "+00:00"))
-    except ValueError as error:
-        raise TelemetryValidationError("timestamp must be ISO-8601.") from error
-    if timestamp.tzinfo is None:
-        raise TelemetryValidationError("timestamp must include a timezone.")
-    timestamp = timestamp.astimezone(UTC)
     received_at = received_at.astimezone(UTC)
-    if timestamp > received_at.replace(microsecond=0) + timedelta(minutes=5):
-        raise TelemetryValidationError("timestamp is too far in the future.")
+    timestamp_source = payload.get("timestamp_source")
+    if timestamp_source is None:
+        timestamp_source = "unknown"
+    if timestamp_source not in {
+        "device_utc",
+        "server_generated",
+        "uptime",
+        "unknown",
+    }:
+        raise TelemetryValidationError("timestamp_source is not supported.")
+
+    uptime_ms = payload.get("uptime_ms")
+    if uptime_ms is not None and (
+        isinstance(uptime_ms, bool)
+        or not isinstance(uptime_ms, int)
+        or not 0 <= uptime_ms <= 0xFFFFFFFF
+    ):
+        raise TelemetryValidationError(
+            "uptime_ms must be an unsigned 32-bit integer."
+        )
+
+    if timestamp_source == "uptime":
+        if payload.get("timestamp", "missing") is not None:
+            raise TelemetryValidationError(
+                "timestamp must be null when timestamp_source is uptime."
+            )
+        if uptime_ms is None:
+            raise TelemetryValidationError(
+                "uptime_ms is required when timestamp_source is uptime."
+            )
+        timestamp = received_at
+        stored_timestamp_source = "server_received"
+    else:
+        timestamp_value = _required_text(payload, "timestamp", 40)
+        try:
+            timestamp = datetime.fromisoformat(
+                timestamp_value.replace("Z", "+00:00")
+            )
+        except ValueError as error:
+            raise TelemetryValidationError("timestamp must be ISO-8601.") from error
+        if timestamp.tzinfo is None:
+            raise TelemetryValidationError("timestamp must include a timezone.")
+        timestamp = timestamp.astimezone(UTC)
+        if timestamp > received_at.replace(microsecond=0) + timedelta(minutes=5):
+            raise TelemetryValidationError("timestamp is too far in the future.")
+        stored_timestamp_source = timestamp_source
 
     chip_revision = payload.get("chip_revision")
     if (
@@ -114,6 +202,9 @@ def validate_telemetry_payload(raw: bytes | str, received_at: datetime) -> dict:
     return {
         "device_id": device_id,
         "message_id": message_id,
+        "payload_source": payload["source"],
+        "timestamp_source": stored_timestamp_source,
+        "source_uptime_ms": uptime_ms,
         **numeric_values,
         "timestamp": timestamp.replace(tzinfo=None),
         "received_at": received_at.replace(tzinfo=None),
@@ -143,13 +234,18 @@ def ingest_telemetry_message(
     payload = validate_telemetry_payload(raw, received_at)
 
     device = Device.query.filter_by(
-        name=payload["device_id"],
-        vendor=current_app.config["TELEMETRY_DEVICE_VENDOR"],
-        model=current_app.config["TELEMETRY_DEVICE_MODEL"],
+        telemetry_device_id=payload["device_id"],
     ).first()
     if device is None:
         raise TelemetryDeviceError(
-            "SolarGuard-01 is not registered with the expected simulated metadata."
+            "SolarGuard-01 stable telemetry device_id is not registered."
+        )
+    if (
+        device.vendor != current_app.config["TELEMETRY_DEVICE_VENDOR"]
+        or device.model != current_app.config["TELEMETRY_DEVICE_MODEL"]
+    ):
+        raise TelemetryDeviceError(
+            "Telemetry device ID does not match the expected simulated metadata."
         )
     if device.status == ARCHIVED_DEVICE_STATUS:
         raise TelemetryDeviceError("Archived devices cannot receive live telemetry.")
@@ -168,6 +264,9 @@ def ingest_telemetry_message(
         timestamp=payload["timestamp"],
         received_at=payload["received_at"],
         ingest_source=ingest_source,
+        payload_source=payload["payload_source"],
+        timestamp_source=payload["timestamp_source"],
+        source_uptime_ms=payload["source_uptime_ms"],
         telemetry_status=payload["telemetry_status"],
         chip_model=payload["chip_model"],
         chip_revision=payload["chip_revision"],
@@ -175,7 +274,8 @@ def ingest_telemetry_message(
         esp_idf_version=payload["esp_idf_version"],
     )
     db.session.add(reading)
-    device.last_seen = payload["received_at"]
+    device.last_seen = received_at.replace(tzinfo=None)
+    _record_demo_threshold_alerts(device, payload)
     try:
         db.session.commit()
     except IntegrityError:
@@ -192,14 +292,17 @@ def create_local_demo_reading() -> bool:
     """Store one explicitly local simulated reading without using MQTT."""
     timestamp = datetime.now(UTC).replace(microsecond=0)
     payload = {
+        "schema_version": 1,
         "message_id": f"local-{token_hex(12)}",
         "device_id": current_app.config["TELEMETRY_DEVICE_ID"],
+        "source": "local_demo",
         "manufacturer": current_app.config["TELEMETRY_DEVICE_VENDOR"],
         "model": current_app.config["TELEMETRY_DEVICE_MODEL"],
         "voltage": 230.0,
         "current": 4.0,
         "power": 920.0,
         "timestamp": timestamp.isoformat(),
+        "timestamp_source": "server_generated",
         "telemetry_status": "SIMULATED",
         "chip_model": "LOCAL-DEMO",
         "chip_revision": 0,

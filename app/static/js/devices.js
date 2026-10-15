@@ -99,11 +99,18 @@ document.addEventListener("DOMContentLoaded", () => {
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const status = document.querySelector("[data-scan-status]");
+    const button = form.querySelector('button[type="submit"]');
+    const originalLabel = button.textContent;
     const token = document.querySelector('meta[name="csrf-token"]').content;
+    button.disabled = true;
+    button.textContent = "Scanning...";
+    status.textContent =
+      "Loading saved component evidence and querying NVD. This can take a minute.";
+    status.hidden = false;
     try {
       const payload = Object.fromEntries(new FormData(form).entries());
       payload.device_id = Number(payload.device_id);
-      const response = await fetch("/api/scans", {
+      const response = await fetch(form.dataset.scanEndpoint || "/api/scans", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -111,14 +118,28 @@ document.addEventListener("DOMContentLoaded", () => {
         },
         body: JSON.stringify(payload),
       });
-      const result = await response.json();
+      const result = await response.json().catch(() => null);
+      if (result?.id && result.status === "failed") {
+        status.textContent = "Scan failed. Opening the saved failure details...";
+        window.location.href = `/scans/${result.id}`;
+        return;
+      }
       if (!response.ok) {
-        throw new Error(result.summary || result.error || "Unable to run scan.");
+        throw new Error(
+          result?.summary || result?.error || `Scan request failed (${response.status}).`,
+        );
+      }
+      if (!result?.id || result.status !== "completed") {
+        throw new Error("The server returned an invalid scan result.");
       }
       window.location.href = `/scans/${result.id}`;
     } catch (error) {
-      status.textContent = error.message;
-      status.hidden = false;
+      status.textContent =
+        error instanceof TypeError
+          ? "Network error: the scan result could not be received. Check the server and try again."
+          : error.message;
+      button.disabled = false;
+      button.textContent = originalLabel;
     }
   });
 });

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from flask import Blueprint, jsonify, request
-from flask_login import login_required
+from flask_login import current_user, login_required
 
 from app.models.scan import Scan
+from app.services.component_scan_service import run_component_scan
 from app.services.scan_service import run_scan_for_device
 
 api_scans_bp = Blueprint("api_scans", __name__)
@@ -37,4 +38,26 @@ def create_scan():
         return jsonify({"error": "device_id is required."}), 400
     scan = run_scan_for_device(device_id)
     status_code = 201 if scan.status == "completed" else 502
-    return jsonify({"id": scan.id, "status": scan.status, "summary": scan.summary}), status_code
+    return jsonify({
+        "id": scan.id,
+        "status": scan.status,
+        "summary": scan.summary,
+    }), status_code
+
+
+@api_scans_bp.post("/components")
+@login_required
+def create_component_scan():
+    if not current_user.is_admin:
+        return jsonify({"error": "Administrator access is required."}), 403
+    payload = request.get_json(silent=True) or {}
+    device_id = payload.get("device_id")
+    if not isinstance(device_id, int) or isinstance(device_id, bool):
+        return jsonify({"error": "device_id is required."}), 400
+    scan = run_component_scan(device_id)
+    status_code = 201 if scan.status == "completed" else 502
+    return jsonify({
+        "id": scan.id,
+        "status": scan.status,
+        "summary": scan.summary,
+    }), status_code

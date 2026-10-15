@@ -35,6 +35,19 @@ class TelemetryReading(db.Model):
         default="mqtt",
         server_default="mqtt",
     )
+    payload_source = db.Column(
+        db.String(30),
+        nullable=False,
+        default="unknown",
+        server_default="unknown",
+    )
+    timestamp_source = db.Column(
+        db.String(30),
+        nullable=False,
+        default="unknown",
+        server_default="unknown",
+    )
+    source_uptime_ms = db.Column(db.BigInteger)
     telemetry_status = db.Column(db.String(20), nullable=False)
     chip_model = db.Column(db.String(80), nullable=False)
     chip_revision = db.Column(db.Integer, nullable=False)

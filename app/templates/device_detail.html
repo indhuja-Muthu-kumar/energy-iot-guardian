@@ -5,17 +5,48 @@
     <div><p class="section-kicker">DEVICE PROFILE · ASSET #{{ device.id }}</p><h1 class="page-title">{{ device.name }}</h1><p class="page-description">Review device identity, assessment evidence, telemetry, alerts, and remediation records.</p></div>
     {% if device.status == 'archived' %}
       <span class="status-pill">Archived · history preserved</span>
+    {% elif component_scan_device and current_user.is_admin %}
+      <form data-device-form data-scan-endpoint="{{ url_for('api_scans.create_component_scan') }}">
+        <input type="hidden" name="device_id" value="{{ device.id }}">
+        <button type="submit">Scan ESP32 components</button>
+        <p data-scan-status role="status" aria-live="polite" hidden></p>
+      </form>
+    {% elif component_scan_device %}
+      <p class="summary-disclaimer">Administrator access is required to scan ESP32 components.</p>
     {% else %}
-      <a class="button" href="{{ url_for('pages.scan_new') }}">Run a scan</a>
+      <form data-device-form data-device-scan-name="{{ device.name }}">
+        <input type="hidden" name="device_id" value="{{ device.id }}">
+        <button type="submit">Run Scan</button>
+        <p data-scan-status role="status" aria-live="polite" hidden></p>
+      </form>
     {% endif %}
   </div>
   <section class="device-facts grid grid-3" aria-label="Device information">
     <article class="card fact-card"><span>Vendor</span><strong>{{ device.vendor }}</strong></article>
     <article class="card fact-card"><span>Model</span><strong>{{ device.model }}</strong></article>
-    <article class="card fact-card"><span>Firmware version</span><strong>{{ firmware_value if firmware_value and firmware_value|lower != 'unknown' else 'Unknown' }}</strong></article>
+    <article class="card fact-card"><span>Firmware version</span><strong>{{ firmware_value if firmware_value and firmware_value|lower != 'unknown' else 'Unknown' }}</strong><small>{{ device.firmware_verification_status|replace('_', ' ')|title }} · {{ device.firmware_confidence|title }} confidence</small></article>
     <article class="card fact-card"><span>Asset tag</span><strong>{{ device.asset_tag or 'Unknown' }}</strong></article>
     <article class="card fact-card"><span>Site</span><strong>{{ device.site or 'Unknown' }}</strong></article>
     <article class="card fact-card"><span>Device status</span><strong><span class="status-pill">{{ device.status|title }}</span></strong></article>
+    <article class="card fact-card"><span>Simulation status</span><strong>{{ device.simulation_status|replace('_', ' ')|title }}</strong></article>
+  </section>
+  <section class="card" aria-labelledby="component-inventory-title">
+    <div class="panel-header"><div><h2 id="component-inventory-title">Component and software evidence</h2><p>Confirmed version matching requires verified evidence; unauthenticated simulated runtime reports remain potential candidates.</p></div></div>
+    {% if device.components %}
+      <div class="table-scroll"><table class="table responsive-table">
+        <thead><tr><th>Component</th><th>Product / version</th><th>Evidence type / state</th><th>Source and method</th><th>Assessment note</th></tr></thead>
+        <tbody>{% for component in device.components %}
+          <tr>
+            <td data-label="Component">{{ component.name }}<small>{{ component.component_type|title }}</small></td>
+            <td data-label="Product / version">{{ component.product }}<small>{{ component.version or 'Installed version unknown' }}</small></td>
+            <td data-label="Evidence type / state"><span class="assessment-tag {{ component.evidence_status|lower }}">{{ component.evidence_status|replace('_', ' ')|title }}</span><small>{{ component.evidence_method }} · {{ component.confidence|title }} confidence</small></td>
+            <td data-label="Source and method">{% if component.evidence_source and component.evidence_source.startswith('https://') %}<a href="{{ component.evidence_source }}" target="_blank" rel="noopener noreferrer">Manufacturer reference ↗</a>{% elif component.evidence_source %}{{ component.evidence_source }}{% else %}No source recorded{% endif %}<small>{{ component.evidence_method }}</small></td>
+            <td data-label="Assessment note">{{ component.evidence_note }}</td>
+          </tr>
+        {% endfor %}</tbody>
+      </table></div>
+    {% else %}<p class="empty-state">No component inventory has been recorded for this device.</p>{% endif %}
+    {% if device.simulation_status == 'simulated' %}<p class="telemetry-disclaimer">SIMULATED DEVICE — CVE results apply only to the recorded simulation inventory, not physical equipment.</p>{% elif device.simulation_status == 'reference' %}<p class="summary-disclaimer">REFERENCE DATA ONLY — this inventory record is not a physical or simulated installed device. Documented versions are compatibility requirements, not installed firmware.</p>{% elif device.simulation_status == 'unknown' %}<p class="summary-disclaimer">Simulation status has not been verified. No physical-device claim is made.</p>{% endif %}
   </section>
   {% if device.status != 'archived' %}
   <section class="card form-panel" aria-labelledby="edit-device-title">
@@ -31,9 +62,20 @@
         <label>Model
           <input name="model" required maxlength="120" value="{{ device.model }}">
         </label>
-        <label>Firmware version
-          <input name="firmware_version" maxlength="120" value="{{ firmware_value if firmware_value and firmware_value|lower != 'unknown' else '' }}">
-        </label>
+        {% if not device.telemetry_device_id and device.simulation_status != 'reference' %}
+          <label>Firmware version
+            <input name="firmware_version" maxlength="120" value="{{ firmware_value if firmware_value and firmware_value|lower != 'unknown' else '' }}">
+          </label>
+          <label>Firmware evidence source or URL
+            <input name="firmware_evidence_source" maxlength="160" value="{{ device.firmware_evidence_source or '' }}" placeholder="Evidence label or https:// source URL">
+          </label>
+          <label>Firmware evidence method
+            <input name="firmware_evidence_method" maxlength="120" value="{{ device.firmware_evidence_method or '' }}" placeholder="Manual entry, authenticated interface">
+          </label>
+          <label>Evidence note
+            <input name="firmware_evidence_note" maxlength="2000" value="{{ device.firmware_evidence_note or '' }}" placeholder="Context or reference; do not include credentials">
+          </label>
+        {% endif %}
         <label>Asset tag
           <input name="asset_tag" maxlength="80" value="{{ device.asset_tag or '' }}">
         </label>
@@ -41,12 +83,30 @@
           <input name="site" maxlength="120" value="{{ device.site or '' }}">
         </label>
       </div>
+      <p class="summary-disclaimer">{% if device.telemetry_device_id %}SolarGuard-01 product firmware stays Unknown. ESP32 board, application, framework, toolchain, and bootloader evidence are tracked separately below.{% else %}Saving a firmware version records it as REPORTED with low confidence. Manual entry does not independently verify product firmware.{% endif %}</p>
       <button type="submit">Save changes</button>
       <p data-device-edit-status role="status" aria-live="polite" hidden></p>
     </form>
   </section>
   {% else %}
   <p class="summary-disclaimer">This device is archived. Its inventory fields are read-only, and its existing scan and finding history remains available below.</p>
+  {% endif %}
+  <section class="card" aria-labelledby="firmware-evidence-title">
+    <div class="panel-header"><div><h2 id="firmware-evidence-title">Firmware evidence</h2><p>Product firmware is separate from the ESP32 runtime and is not independently verified by this demo.</p></div></div>
+    <dl class="detail-list">
+      <div><dt>State</dt><dd>{{ device.firmware_verification_status|replace('_', ' ')|title }} · {{ device.firmware_confidence|title }} confidence</dd></div>
+      <div><dt>Evidence source</dt><dd>{% if device.firmware_evidence_source %}{% if device.firmware_evidence_source.lower().startswith('https://') %}<a href="{{ device.firmware_evidence_source }}" target="_blank" rel="noopener noreferrer">{{ device.firmware_evidence_source }}</a>{% else %}{{ device.firmware_evidence_source }}{% endif %}{% else %}Not recorded{% endif %}</dd></div>
+      <div><dt>Collection method</dt><dd>{{ device.firmware_evidence_method or 'Not recorded' }}</dd></div>
+      <div><dt>Collected</dt><dd>{{ device.firmware_evidence_collected_at.strftime('%Y-%m-%d %H:%M UTC') if device.firmware_evidence_collected_at else 'Unknown' }}</dd></div>
+      <div><dt>Evidence note</dt><dd>{{ device.firmware_evidence_note or 'No supporting evidence note recorded.' }}</dd></div>
+    </dl>
+  </section>
+  {% if 'sma' in device.vendor|lower and 'tl-21' in device.model|lower %}
+  <section class="card" aria-labelledby="manufacturer-reference-title">
+    <div class="panel-header"><div><h2 id="manufacturer-reference-title">Manufacturer firmware reference</h2><p>Reference requirement only — this does not verify the firmware installed on this asset.</p></div></div>
+    <p>SMA's off-grid system guide lists 2.60.03.R or higher for SB 3000TL-21, SB 3600TL-21, SB 4000TL-21, SB 5000TL-21, and SB 6000TL-21 in that off-grid system context. These are reference compatibility requirements; they do not establish the installed firmware or identify the exact variant of any physical device.</p>
+    <p><a href="https://manuals.sma.de/OffGridSystem-PL/en-US/1862614539.html" target="_blank" rel="noopener noreferrer">Open SMA's Selecting the PV Inverter guide ↗</a></p>
+  </section>
   {% endif %}
   <section class="card" aria-labelledby="device-scan-history">
     <div class="panel-header"><div><h2 id="device-scan-history">Scan history</h2><p>{{ scans|length }} scan record{% if scans|length != 1 %}s{% endif %}</p></div></div>
@@ -73,11 +133,13 @@
     <div class="panel-header"><div><h2 id="device-findings-title">Assessment evidence</h2><p>Recorded scan findings; potential matches are not confirmed affected versions.</p></div></div>
     {% if findings %}
       <div class="table-scroll"><table class="table responsive-table">
-        <thead><tr><th>CVE</th><th>Severity</th><th>Assessment / confidence</th><th>Component / version</th><th>Evidence</th></tr></thead>
+        <thead><tr><th>CVE / description</th><th>Severity</th><th>Contextual priority</th><th>CISA KEV</th><th>Assessment / confidence</th><th>Component / version</th><th>Evidence</th></tr></thead>
         <tbody>{% for finding in findings %}
           <tr>
-            <td data-label="CVE"><a href="{{ url_for('pages.cve_detail', cve_id=finding.cve_id) }}">{{ finding.cve_id }}</a></td>
+            <td data-label="CVE / description"><a href="https://nvd.nist.gov/vuln/detail/{{ finding.cve_id|urlencode }}" target="_blank" rel="noopener noreferrer">{{ finding.cve_id }} ↗</a><small>{{ finding.cve.description if finding.cve and finding.cve.description else 'No description returned by NVD.' }}</small></td>
             <td data-label="Severity"><span class="severity-badge {{ finding.severity|lower }}">{{ finding.severity|title }}</span></td>
+            <td data-label="Contextual priority"><span class="status-pill">{{ finding_priorities[finding.id].priority }}</span><small>{{ finding_priorities[finding.id].reason }}</small></td>
+            <td data-label="CISA KEV">{{ 'Listed in stored catalog' if finding.cve_id in kev_ids else 'Not listed in stored catalog' }}<small>Local catalog status; verify sync freshness on the dashboard.</small></td>
             <td data-label="Assessment / confidence"><span class="assessment-tag {{ finding.match_status }}">{{ finding.match_status|replace('_', ' ')|title }}</span><small>{{ finding.confidence|title }} confidence · {{ finding.matched_by or 'Source not recorded' }}</small></td>
             <td data-label="Component / version">{{ finding.component_name or 'Not identified' }}<small>{{ finding.component_version or 'Version unknown' }}</small></td>
             <td data-label="Evidence">{{ finding.evidence or finding.summary or 'No evidence stored.' }}</td>

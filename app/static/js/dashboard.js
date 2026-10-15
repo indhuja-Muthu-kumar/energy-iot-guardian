@@ -128,17 +128,35 @@ function startDeviceTelemetry() {
     displayText("[data-telemetry-current]", Number(latest.current).toFixed(1));
     displayText("[data-telemetry-power]", Number(latest.power).toFixed(1));
     const stateText = {
-      connected: "Connected · SIMULATED",
-      stale: "Stale · SIMULATED",
-      demo: "Local demo · simulated",
-      demo_stale: "Local demo · stale · simulated",
+      connected: "Online · SIMULATED",
+      stale: "Offline · SIMULATED · no recent telemetry",
+      demo: "Local demo · not connected · simulated",
+      demo_stale: "Local demo · stale · not live",
       archived: "Archived · history only",
     };
     displayText("[data-telemetry-status]", stateText[data.state] || "Unknown");
     const sourceElement = panel.querySelector("[data-telemetry-source]");
-    sourceElement.textContent = data.latest.ingest_source === "local_demo"
-      ? "LOCAL DEMO · NOT LIVE"
-      : "SIMULATED · MQTT";
+    sourceElement.textContent = data.latest.payload_source === "local_demo"
+      ? (data.latest.ingest_source === "mqtt"
+        ? "SIMULATED DEVICE · MQTT · SYNTHETIC DEMO"
+        : "SIMULATED DEVICE · LOCAL DEMO · NOT LIVE")
+      : data.latest.payload_source === "wokwi_simulation"
+        ? "SIMULATED DEVICE · MQTT · WOKWI-REPORTED"
+        : "SIMULATED DEVICE · MQTT · SOURCE UNKNOWN";
+    displayText("[data-telemetry-message-id]", latest.message_id);
+    const timestampSources = {
+      device_utc: "Device UTC clock",
+      server_received: "Server receipt time; device supplied uptime fallback",
+      server_generated: "Server-generated demo time",
+      unknown: "Unknown timestamp source",
+    };
+    const sourceUptime = latest.source_uptime_ms === null
+      ? ""
+      : ` · device uptime ${latest.source_uptime_ms} ms`;
+    displayText(
+      "[data-telemetry-timestamp-source]",
+      `${timestampSources[latest.timestamp_source] || "Unknown timestamp source"}${sourceUptime}`,
+    );
     const received = new Date(latest.received_at);
     const receivedElement = panel.querySelector("[data-telemetry-received]");
     receivedElement.dateTime = received.toISOString();
@@ -151,6 +169,20 @@ function startDeviceTelemetry() {
       );
       displayText("[data-telemetry-arduino]", data.runtime.arduino_core_version);
       displayText("[data-telemetry-idf]", data.runtime.esp_idf_version);
+      displayText(
+        "[data-telemetry-evidence]",
+        `${data.runtime.evidence_note} Evidence confidence: ${data.runtime.confidence}; independently verified: no.`,
+      );
+    }
+
+    if (data.product_firmware) {
+      const productFirmware = data.product_firmware;
+      displayText(
+        "[data-product-firmware]",
+        productFirmware.status === "unknown"
+          ? "Unknown; version-specific applicability cannot be confirmed."
+          : `${productFirmware.version} (recorded in inventory; not independently verified).`,
+      );
     }
 
     historyBody.replaceChildren();
@@ -173,8 +205,18 @@ function startDeviceTelemetry() {
         credentials: "same-origin",
         headers: { Accept: "application/json" },
       });
+      if (
+        response.redirected &&
+        new URL(response.url, window.location.href).pathname === "/auth/login"
+      ) {
+        renderWaiting("Sign in again to resume telemetry updates.");
+        return;
+      }
       if (!response.ok) {
         throw new Error(`Telemetry API returned HTTP ${response.status}.`);
+      }
+      if (!response.headers.get("content-type")?.includes("application/json")) {
+        throw new Error("Telemetry API returned a non-JSON response.");
       }
       renderTelemetry(await response.json());
     } catch (error) {

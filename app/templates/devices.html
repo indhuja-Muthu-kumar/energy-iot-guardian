@@ -29,7 +29,7 @@
     </label>
     <div class="table-scroll"><table class="table responsive-table devices-table">
       <thead>
-        <tr><th>Device</th><th>Manufacturer / model</th><th>Firmware</th><th>Device status</th><th>Last telemetry</th><th>Latest assessment</th><th>Actions</th></tr>
+        <tr><th>Device</th><th>Manufacturer / model</th><th>Firmware</th><th>Inventory status</th><th>Last telemetry</th><th>Latest assessment</th><th>Actions</th></tr>
       </thead>
       <tbody>
         {% for device in devices %}
@@ -37,14 +37,21 @@
           {% set reading = latest_telemetry.get(device.id) %}
           {% set assessment = latest_findings.get(device.id) %}
           <tr data-device-row data-search="{{ (device.name ~ ' ' ~ device.vendor ~ ' ' ~ device.model ~ ' ' ~ firmware_value ~ ' ' ~ (device.site or ''))|lower }}">
-            <td data-label="Device"><a href="{{ url_for('pages.device_detail', device_id=device.id) }}">{{ device.name }}</a><small>Asset #{{ device.id }}{% if device.site %} · {{ device.site }}{% endif %}</small></td>
+            <td data-label="Device"><a href="{{ url_for('pages.device_detail', device_id=device.id) }}">{{ device.name }}</a><small>Asset #{{ device.id }}{% if device.site %} · {{ device.site }}{% endif %}</small>{% if device.simulation_status == 'simulated' %}<small>SIMULATED DEVICE · {{ device.telemetry_device_id or 'inventory label' }}</small>{% elif device.simulation_status == 'reference' %}<small>REFERENCE DATA ONLY · not a physical asset</small>{% elif device.simulation_status == 'physical' %}<small>PHYSICAL DEVICE</small>{% elif device.simulation_status == 'unknown' %}<small>Simulation status unknown</small>{% endif %}</td>
             <td data-label="Manufacturer / model">{{ device.vendor }}<small>{{ device.model }}</small></td>
             <td data-label="Firmware">
               {% if firmware_value and firmware_value|lower != 'unknown' %}{{ firmware_value }}{% else %}<span class="status-tag status-unknown">Unknown firmware</span>{% endif %}
             </td>
-            <td data-label="Device status"><span class="status-tag status-healthy">{{ device.status|title }}</span></td>
+            <td data-label="Inventory status"><span class="status-tag">{{ device.status|title }}</span></td>
             <td data-label="Last telemetry">
-              {% if reading %}<time datetime="{{ reading.received_at.isoformat() }}">{{ reading.received_at.strftime('%Y-%m-%d %H:%M UTC') }}</time><small>{{ reading.telemetry_status }} · {{ reading.ingest_source|replace('_', ' ')|title }}</small>{% else %}<span class="muted">No telemetry recorded</span>{% endif %}
+              {% if reading %}<time datetime="{{ reading.received_at.isoformat() }}">{{ reading.received_at.strftime('%Y-%m-%d %H:%M UTC') }}</time><small>{{ reading.telemetry_status }} · {{ reading.ingest_source|replace('_', ' ')|title }}</small>{% endif %}
+              {% set freshness = telemetry_freshness.get(device.id, 'never') %}
+              {% if freshness == 'fresh' %}<span class="status-tag status-info">Fresh</span>
+              {% elif freshness == 'simulated_fresh' %}<span class="status-tag status-info">Fresh · simulated</span>
+              {% elif freshness == 'stale' %}<span class="status-tag status-warning">Stale</span>
+              {% elif freshness == 'simulated_stale' %}<span class="status-tag status-warning">Stale · simulated</span>
+              {% elif freshness == 'demo' %}<span class="status-tag status-unknown">Local demo sample · simulated</span>
+              {% else %}<span class="muted">No telemetry recorded</span>{% endif %}
             </td>
             <td data-label="Latest assessment">
               {% if assessment %}<span class="assessment-tag {{ assessment.match_status }}">{{ assessment.match_status|replace('_', ' ')|title }}</span><small>{{ assessment.cve_id }} · {{ assessment.confidence|title }} confidence</small>{% else %}<span class="status-tag status-unknown">Not assessed</span>{% endif %}

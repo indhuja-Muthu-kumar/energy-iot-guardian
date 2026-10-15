@@ -5,7 +5,7 @@
   <div class="page-heading">
     <div><h1 class="page-title">Patch &amp; remediation center</h1><p class="page-description">Review recorded remediation candidates and their evidence. Approval is not installation; simulated verification is not proof of a fixed device.</p></div>
   </div>
-  <div class="inline-warning" role="note"><strong>Patch confidence:</strong> Candidate records marked simulated are workflow demonstrations only. They do not contain an official patch recommendation or prove that firmware changed. No simulated candidate is presented as resolved.</div>
+  <div class="inline-warning" role="note"><strong>Patch confidence:</strong> NVD-tagged vendor links are review leads; their contents and fixed versions are not assumed. Approving a recommendation means only that an administrator reviewed it. This application does not install software, and it never marks an asset fixed without separate verification evidence.</div>
   <section class="card" aria-labelledby="remediation-list-heading">
     <div class="panel-header"><div><h2 id="remediation-list-heading">Recorded remediation items</h2><p>Source links are displayed only for records explicitly marked non-simulated.</p></div></div>
     {% if candidates %}
@@ -26,6 +26,13 @@
                     <small>No verified official patch or URL. {{ candidate.patch_source|replace('-', ' ')|title }}</small>
                   {% elif candidate.patch_url %}
                     <a href="{{ candidate.patch_url }}" target="_blank" rel="noopener noreferrer">Recorded patch source ↗</a><small>{{ candidate.patch_source }}</small>
+                    <small>No fixed target version is asserted unless explicitly listed above.</small>
+                    <ol>
+                      <li>Open the vendor advisory and confirm it applies to this exact product and installed version.</li>
+                      <li>Back up configuration and data before any update; check the vendor's supported upgrade path and compatibility notes.</li>
+                      <li>Use the vendor's documented update procedure yourself. This application does not flash or install software.</li>
+                      <li>Afterward, collect independent version evidence and run a new scan. A scan alone does not prove an update succeeded.</li>
+                    </ol>
                   {% else %}
                     <span class="status-tag status-unknown">No verified source</span>
                   {% endif %}
@@ -33,6 +40,7 @@
                 </td>
                 <td data-label="Workflow status">
                   {% if candidate.is_simulated %}<span class="status-tag status-warning">Simulated: {{ candidate.status|replace('_', ' ')|title }}</span>
+                  {% elif candidate.status == 'discovered' %}<span class="status-tag status-info">Review Required</span>
                   {% else %}<span class="status-tag status-info">{{ candidate.status|replace('_', ' ')|title }}</span>{% endif %}
                   {% if candidate.approved_at %}<small>Approval recorded {{ candidate.approved_at.strftime('%Y-%m-%d %H:%M UTC') }} by {{ candidate.approved_by or 'unknown' }}</small>{% endif %}
                   {% if candidate.verified_at %}<small>Workflow verification recorded {{ candidate.verified_at.strftime('%Y-%m-%d %H:%M UTC') }} by {{ candidate.verified_by or 'unknown' }}</small>{% endif %}
@@ -46,10 +54,19 @@
                       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                       <button class="button secondary" type="submit">Simulate approval</button>
                     </form>
+                    <form method="post" action="{{ url_for('pages.reject_simulated_patch', candidate_id=candidate.id) }}" data-confirm="Reject this simulated workflow candidate? No device change will occur.">
+                      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                      <button class="button secondary" type="submit">Reject candidate</button>
+                    </form>
                   {% elif current_user.is_admin and candidate.is_simulated and candidate.status == 'approved' %}
                     <form method="post" action="{{ url_for('pages.verify_simulated_patch', candidate_id=candidate.id) }}" data-confirm="Record simulated verification only? This will not confirm firmware was patched.">
                       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                       <button class="button secondary" type="submit">Record simulated verification</button>
+                    </form>
+                  {% elif current_user.is_admin and not candidate.is_simulated and candidate.status == 'discovered' and candidate.patch_url %}
+                    <form method="post" action="{{ url_for('pages.approve_vendor_recommendation', candidate_id=candidate.id) }}" data-confirm="Approve this advisory for follow-up only? No software will be installed.">
+                      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                      <button class="button secondary" type="submit">Approve for follow-up</button>
                     </form>
                   {% else %}<span class="muted">{% if current_user.is_admin %}No transition available{% else %}Administrator action{% endif %}</span>{% endif %}
                 </td>
@@ -59,7 +76,7 @@
         </table>
       </div>
     {% else %}
-      <div class="empty-panel"><strong>No remediation items recorded.</strong><p>Items are shown only when a candidate record exists. The application will not invent a vendor patch or fixed version.</p></div>
+      <div class="empty-panel"><strong>No remediation items recorded.</strong><p>No vendor advisory candidate was saved for the current findings. The application will not invent a vendor patch or fixed version. Review the scan result sources and vendor support channels.</p></div>
     {% endif %}
   </section>
 {% endblock %}

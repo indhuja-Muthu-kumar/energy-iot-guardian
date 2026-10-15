@@ -173,6 +173,7 @@ form .grid { margin-bottom: 12px; }
 .inline-warning p { margin: 5px 0 0; }
 .status-tag, .assessment-tag { display: inline-flex; align-items: center; width: fit-content; max-width: 100%; padding: 4px 8px; border: 1px solid #344858; border-radius: 999px; background: rgba(131,153,166,.09); color: #bccbd4; font-size: 9px; font-weight: 650; line-height: 1.3; overflow-wrap: anywhere; }
 .status-healthy, .assessment-tag.affected { border-color: rgba(54,198,186,.36); background: rgba(54,198,186,.09); color: #83e2d6; }
+.assessment-tag.not_affected { border-color: rgba(133,148,168,.32); background: rgba(133,148,168,.08); color: #c0ccd4; }
 .status-info, .assessment-tag.potential { border-color: rgba(74,170,192,.34); background: rgba(74,170,192,.1); color: #9bdce9; }
 .status-warning, .assessment-tag.indeterminate, .assessment-tag.not_applicable { border-color: rgba(255,181,46,.32); background: rgba(255,181,46,.08); color: #f1cf83; }
 .status-unknown, .assessment-tag.unknown { border-color: #3a4b57; background: rgba(129,148,160,.08); color: #bac5cb; }

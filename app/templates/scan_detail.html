@@ -7,7 +7,7 @@
   <section class="card scan-summary-card" aria-label="Scan summary">
     <div class="scan-summary-top">
       <div><span class="detail-label">Status</span><span class="status-pill {{ scan.status|lower }}">{{ scan.status|title }}</span></div>
-      <div><span class="detail-label">Scan type</span>{{ 'ESP32 components' if scan.scan_type == 'components' else 'Device' }}</div>
+      <div><span class="detail-label">Scan type</span>{{ 'ESP32 components' if scan.scan_type == 'components' else 'Device inventory' }}</div>
       <div><span class="detail-label">Device</span>{% if scan.device %}<a href="{{ url_for('pages.device_detail', device_id=scan.device.id) }}">{{ scan.device.name }}</a>{% else %}<span>Unknown device</span>{% endif %}</div>
       <div><span class="detail-label">Findings</span><strong>{{ scan.findings|length }}</strong></div>
       <div><span class="detail-label">Started</span><span>{{ scan.started_at.strftime('%Y-%m-%d %H:%M:%S') if scan.started_at else 'N/A' }}</span></div>
@@ -15,8 +15,36 @@
     </div>
     <div class="scan-summary-text"><span class="detail-label">Summary</span><p>{{ scan.summary or 'No summary yet.' }}</p></div>
   </section>
+  {% if scan_evidence.get('device') %}
+    {% set device_evidence = scan_evidence.get('device', {}) %}
+    <section class="card" aria-labelledby="scan-device-evidence">
+      <div class="panel-header"><div><h2 id="scan-device-evidence">Inventory snapshot used for this scan</h2><p>{{ device_evidence.get('vendor', 'Unknown vendor') }} · {{ device_evidence.get('model', 'Unknown model') }} · Simulation status: {{ device_evidence.get('simulation_status', 'unknown')|replace('_', ' ')|title }}</p></div></div>
+      <dl class="detail-list">
+        <div><dt>Product firmware / version</dt><dd>{{ device_evidence.get('firmware_version') or 'Unknown; no version was inferred' }}</dd></div>
+        <div><dt>Firmware evidence status / method</dt><dd>{{ device_evidence.get('firmware_evidence_status', 'UNKNOWN')|replace('_', ' ')|title }} · {{ device_evidence.get('firmware_evidence_method') or 'Not recorded' }}</dd></div>
+        <div><dt>Firmware evidence source</dt><dd>{% set firmware_source = device_evidence.get('firmware_evidence_source') %}{% if firmware_source and firmware_source.startswith('https://') %}<a href="{{ firmware_source }}" target="_blank" rel="noopener noreferrer">{{ firmware_source }}</a>{% else %}{{ firmware_source or 'Not recorded' }}{% endif %}</dd></div>
+      </dl>
+    </section>
+  {% endif %}
+  {% if scan_evidence.get('components') %}
+    <section class="card" aria-labelledby="scan-component-evidence">
+      <div class="panel-header"><div><h2 id="scan-component-evidence">Saved component evidence</h2><p>Confirmed version matches require verified versions and exact NVD CPE identifiers; reported runtime versions can produce potential matches.</p></div></div>
+      <div class="table-scroll"><table class="table responsive-table">
+        <thead><tr><th>Component</th><th>Detected version</th><th>Evidence state</th><th>Assessment</th><th>Evidence</th></tr></thead>
+        <tbody>{% for component in scan_evidence.get('components', []) %}
+          <tr>
+            <td data-label="Component">{{ component.get('component', 'Unknown') }}</td>
+            <td data-label="Detected version">{{ component.get('version') or 'Unknown' }}</td>
+            <td data-label="Evidence state">{{ component.get('evidence_status', 'UNKNOWN')|replace('_', ' ')|title }}</td>
+            <td data-label="Assessment"><span class="assessment-tag {{ component.get('assessment', 'not_assessed') }}">{{ component.get('assessment', 'not_assessed')|replace('_', ' ')|title }}</span></td>
+            <td data-label="Evidence">{{ component.get('reason', 'No assessment detail recorded.') }}{% if component.get('evidence_source') %}<small>Source: {{ component.get('evidence_source') }}</small>{% endif %}{% if component.get('evidence_note') %}<small>{{ component.get('evidence_note') }}</small>{% endif %}</td>
+          </tr>
+        {% endfor %}</tbody>
+      </table></div>
+    </section>
+  {% endif %}
   <div class="findings-heading">
-    <div><h2>Findings <span class="count-chip">{{ scan.findings|length }}</span></h2><p>Potential matches and evaluated NVD CPE/version results from this scan.</p></div>
+    <div><h2>Findings <span class="count-chip">{{ scan.findings|length }}</span></h2><p>Confirmed matches, potential candidates, and evaluated NVD CPE/version results from this scan.</p></div>
     <a class="button secondary" href="{{ url_for('api_reports.export_report_csv', scan_id=scan.id) }}">Export CSV</a>
   </div>
   {% if scan.findings %}
@@ -26,52 +54,39 @@
           <tr>
             <th>CVE ID</th>
             <th>Severity</th>
-            <th>CVSS score</th>
-            <th>CVSS vector</th>
-            {% if scan.scan_type == 'components' %}<th>Component</th>{% endif %}
-            {% if scan.scan_type == 'components' %}<th>Confidence / source</th>{% endif %}
-            <th>Match status</th>
-            <th>Evidence</th>
+            <th>CVSS / scoring source</th>
+            <th>Product / detected version</th>
+            <th>Assessment</th>
+            <th>Impact, evidence, and source links</th>
+            <th>Remediation</th>
           </tr>
         </thead>
         <tbody>
           {% for finding in scan.findings %}
             <tr>
-              <td><a class="cve-link" href="{{ url_for('pages.cve_detail', cve_id=finding.cve_id) }}">{{ finding.cve_id }}</a><a class="source-link" href="https://nvd.nist.gov/vuln/detail/{{ finding.cve_id|urlencode }}" target="_blank" rel="noopener noreferrer">NVD source ↗</a></td>
+              <td><a class="cve-link" href="https://nvd.nist.gov/vuln/detail/{{ finding.cve_id|urlencode }}" target="_blank" rel="noopener noreferrer">{{ finding.cve_id }} ↗</a><a class="source-link" href="{{ url_for('pages.cve_detail', cve_id=finding.cve_id) }}">Stored CVE details</a><small>{{ finding.cve.description if finding.cve and finding.cve.description else 'NVD did not provide a plain-English description.' }}</small></td>
               <td><span class="severity-badge {{ finding.severity|lower if finding.severity|lower in ('critical', 'high', 'medium', 'low') else 'unknown' }}">{{ finding.severity|title if finding.severity and finding.severity|lower != 'unknown' else 'Unknown' }}</span></td>
-              <td>{{ finding.score if finding.score is not none else (finding.cve.cvss_score if finding.cve else 'Not available') }}</td>
-              <td>{{ finding.cve.cvss_vector if finding.cve and finding.cve.cvss_vector else 'Not available' }}</td>
-              {% if scan.scan_type == 'components' %}
-                <td>{{ finding.component_name or 'Unknown' }} {{ finding.component_version or '' }}</td>
-                <td>{{ finding.confidence|title }} · {{ finding.cve.source|upper if finding.cve else 'Unknown' }}</td>
-              {% endif %}
+              <td>{{ finding.score if finding.score is not none else (finding.cve.cvss_score if finding.cve else 'Not available') }} / {{ cvss_metadata.get(finding.id, {}).get('version', 'version unavailable') }}<small>{{ cvss_metadata.get(finding.id, {}).get('source', 'NVD source not specified') }}</small><small>{{ finding.cve.cvss_vector if finding.cve and finding.cve.cvss_vector else 'CVSS vector unavailable' }}</small></td>
+              <td>{{ finding.component_name or 'Product not identified' }}<small>Detected version: {{ finding.component_version or 'Unknown' }}</small></td>
               <td>
-                {% if scan.scan_type == 'components' and finding.match_status == 'affected' %}
-                  <span class="match-badge evaluated">NVD affected version · {{ finding.confidence|title }} confidence</span>
-                {% elif scan.scan_type == 'components' and finding.match_status == 'not_applicable' %}
-                  <span class="match-badge evaluated">Not applicable by evaluated NVD version data · {{ finding.confidence|title }} confidence</span>
-                {% elif scan.scan_type == 'components' and finding.match_status == 'indeterminate' %}
-                  <span class="match-badge indeterminate">Indeterminate NVD CPE configuration · {{ finding.confidence|title }} confidence</span>
-                {% elif scan.scan_type == 'components' and finding.match_status == 'potential' %}
-                  <span class="match-badge potential">Potential NVD match · {{ finding.confidence|title }} confidence</span>
-                {% elif finding.matched_by == 'nvd-vendor-model-keyword' %}
-                  <span class="match-badge potential">Potential keyword match</span>
-                {% elif finding.matched_by == 'nvd-cpe-product-potential' %}
-                  <span class="match-badge potential">Potential CPE product match</span>
-                {% elif finding.matched_by == 'nvd-cpe-logic-indeterminate' %}
-                  <span class="match-badge indeterminate">Indeterminate CPE configuration match</span>
-                {% elif finding.matched_by == 'nvd-cpe-version-range' %}
-                  <span class="match-badge evaluated">NVD CPE/version match (device not independently verified)</span>
+                {% if finding.match_status == 'affected' %}
+                  <span class="match-badge evaluated">Confirmed Affected · {{ finding.confidence|title }} confidence</span>
+                {% elif finding.match_status in ('not_affected', 'not_applicable') %}
+                  <span class="match-badge evaluated">Not Affected by Available Evidence</span>
+                {% elif finding.match_status == 'indeterminate' %}
+                  <span class="match-badge indeterminate">Potential Match · NVD logic indeterminate</span>
                 {% else %}
-                  {{ finding.matched_by or 'Unknown' }}
+                  <span class="match-badge potential">Potential Match</span>
                 {% endif %}
+                <small>{% if finding.matched_by == 'nvd-vendor-model-keyword' %}Potential keyword match{% elif finding.matched_by == 'nvd-cpe-product-potential' %}Potential CPE product match{% elif finding.matched_by == 'nvd-cpe-logic-indeterminate' %}Indeterminate CPE configuration{% else %}{{ finding.matched_by or 'Assessment source not recorded' }}{% endif %} · {{ finding.confidence|title }} confidence</small>
               </td>
-              <td>{{ finding.evidence or 'No supporting evidence recorded.' }}</td>
+              <td>{{ finding.evidence or 'No supporting evidence recorded.' }}<small>Impact/prerequisites: {{ finding.cve.description if finding.cve and finding.cve.description else 'Not documented in the returned NVD record.' }}</small><small>CWE: {{ finding.cve.cwe if finding.cve and finding.cve.cwe else 'Not supplied' }} · Attack vector: {{ finding.cve.attack_vector if finding.cve and finding.cve.attack_vector else 'Not supplied' }}</small><small>CISA KEV: {% if finding.cve_id in kev_ids %}Listed in the locally stored CISA KEV catalog{% else %}Not listed in the locally stored CISA KEV catalog{% endif %} · Last successful catalog sync: {{ kev_last_sync.strftime('%Y-%m-%d %H:%M UTC') if kev_last_sync else 'Never recorded' }}{% if not kev_sync_fresh %} · Catalog may be stale or incomplete{% endif %}</small>{% if finding.cve and finding.cve.raw and finding.cve.raw.get('references') %}<ul>{% for reference in finding.cve.raw.get('references', []) %}{% if reference.get('url', '').startswith('https://') %}<li><a href="{{ reference.get('url') }}" target="_blank" rel="noopener noreferrer">{{ 'Vendor advisory' if 'Vendor Advisory' in reference.get('tags', []) else 'NVD reference' }} ↗</a></li>{% endif %}{% endfor %}</ul>{% endif %}<small>Last checked: {{ scan.completed_at.strftime('%Y-%m-%d %H:%M:%S UTC') if scan.completed_at else 'Not completed' }}</small></td>
+              <td>{% set recommendations = remediation_by_cve.get(finding.cve_id, []) %}{% if recommendations %}{% for candidate in recommendations %}<a href="{{ candidate.patch_url }}" target="_blank" rel="noopener noreferrer">Vendor advisory ↗</a><small>Status: {{ 'Review Required' if candidate.status == 'discovered' else candidate.status|replace('_', ' ')|title }}</small><small>Fixed target version: {{ candidate.recommended_version or 'Not verified in source data' }}</small><small>{{ candidate.evidence }}</small>{% endfor %}{% else %}<span>No NVD-tagged official vendor advisory was returned; no fix/version is recommended.</span>{% endif %}</td>
             </tr>
           {% endfor %}
         </tbody>
       </table></div>
-      <p class="table-note">Potential keyword and product matches are not confirmed vulnerabilities. Component results are based on versions reported by the simulated ESP32 and authoritative NVD CPE data. Confidence rates match evidence only; it does not establish hardware authenticity or exploitability.</p>
+      <p class="table-note">Keyword and product-only matches are Potential Match, never confirmed. Version results are confirmed only when saved component identity and version evidence are Verified and NVD applicability evaluates them. A CVE description is source text, not a guarantee that every listed impact or prerequisite applies to this asset. KEV status reflects the local catalog, whose freshness must be checked separately.</p>
     </section>
   {% else %}
     <section class="card empty-panel" role="status">
@@ -80,10 +95,10 @@
       {% elif scan.status == 'running' %}
         <h3>Scan in progress</h3><p>The scan is still running. Findings will be available after it completes.</p>
       {% elif scan.status == 'completed' %}
-        {% if scan.scan_type == 'components' %}
-          <h3>No applicable NVD results for mapped components</h3><p>This is not proof of safety. Review the summary for components without an exact NVD CPE mapping; the reported firmware/component inventory may be incomplete.</p>
+        {% if scan_evidence.get('components') %}
+          <h3>No matching CVEs returned</h3><p>This is not proof of safety. Review component evidence above: entries marked Not Assessed were excluded because a usable version or exact NVD CPE was unavailable.</p>
         {% else %}
-          <h3>No potential matches found</h3><p>No potential matches were found in the data returned for this scan.</p>
+          <h3>No matching CVEs returned</h3><p>This is not proof of safety. The scan reflects only the available inventory data and NVD results at scan time.</p>
         {% endif %}
       {% else %}
         <h3>No findings recorded</h3><p>No findings were recorded for this scan.</p>

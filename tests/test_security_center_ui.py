@@ -6,6 +6,7 @@ import requests
 from app import create_app
 from app.extensions import db
 from app.models.alert import SecurityAlert
+from app.models.audit import AuditLog
 from app.models.cve import CVE
 from app.models.device import Device
 from app.models.finding import Finding
@@ -170,6 +171,25 @@ def test_cve_detail_api_returns_evidence_and_source_data_safely():
     assert b"data-cve-detail" in client.get("/cves/CVE-2025-12345").data
 
 
+def test_full_csv_report_exports_persisted_records_and_limitations():
+    app = make_app()
+    client = app.test_client()
+    assert client.get("/api/reports/full.csv").status_code == 302
+    authenticate(client, app.security_center_ids["admin"])
+
+    response = client.get("/api/reports/full.csv")
+
+    assert response.status_code == 200
+    assert response.mimetype == "text/csv"
+    content = response.get_data(as_text=True)
+    assert "record_type,generated_at" in content
+    assert "Energy device" in content
+    assert "CVE-2025-12345" in content
+    assert "no-verified-vendor-source" in content
+    assert "Verification history is not implemented" in content
+    assert "Firmware is reported unless separately evidenced as verified" in content
+
+
 def test_alert_acknowledgement_is_a_csrf_protected_post_flow():
     app = make_app()
     client = app.test_client()
@@ -186,6 +206,89 @@ def test_alert_acknowledgement_is_a_csrf_protected_post_flow():
         alert = db.session.get(SecurityAlert, app.security_center_ids["alert"])
         assert alert.status == "acknowledged"
         assert alert.acknowledged_at is not None
+
+
+def test_alert_lifecycle_and_incident_timeline_are_persistent():
+    app = make_app()
+    client = app.test_client()
+    alert_id = app.security_center_ids["alert"]
+    authenticate(client, app.security_center_ids["admin"])
+
+    detail = client.get(f"/alerts/{alert_id}")
+    assert detail.status_code == 200
+    assert b"Incident timeline" in detail.data
+    assert b"Evidence and recommended review" in detail.data
+
+    for status in ("acknowledged", "in_progress", "resolved", "open"):
+        response = client.post(
+            f"/alerts/{alert_id}/transition",
+            data={"status": status},
+            follow_redirects=True,
+        )
+        assert response.status_code == 200
+
+    note = client.post(
+        f"/alerts/{alert_id}/notes",
+        data={"note": "Reviewed the device record and retained this finding."},
+        follow_redirects=True,
+    )
+    assert note.status_code == 200
+    assert b"Reviewed the device record" in note.data
+
+    with app.app_context():
+        alert = db.session.get(SecurityAlert, alert_id)
+        assert alert.status == "open"
+        actions = [
+            (event.action, event.details)
+            for event in AuditLog.query.filter_by(
+                entity_type="security_alert",
+                entity_id=str(alert_id),
+            ).order_by(AuditLog.id.asc())
+        ]
+        assert [action for action, _details in actions] == [
+            "status_changed",
+            "status_changed",
+            "status_changed",
+            "reopened",
+            "note_added",
+        ]
+        assert all(
+            db.session.get(AuditLog, event_id).user_id
+            == app.security_center_ids["admin"]
+            for event_id in AuditLog.query.with_entities(AuditLog.id).all()
+        )
+
+
+def test_alert_transition_rejects_invalid_states_and_requires_login():
+    app = make_app()
+    alert_id = app.security_center_ids["alert"]
+    anonymous = app.test_client()
+    assert anonymous.post(
+        f"/alerts/{alert_id}/transition",
+        data={"status": "resolved"},
+    ).status_code == 302
+
+    client = app.test_client()
+    authenticate(client, app.security_center_ids["viewer"])
+    denied = client.post(
+        f"/alerts/{alert_id}/transition",
+        data={"status": "acknowledged"},
+    )
+    assert denied.status_code == 403
+    assert client.post(
+        f"/alerts/{alert_id}/notes",
+        data={"note": "viewer cannot add notes"},
+    ).status_code == 403
+
+    authenticate(client, app.security_center_ids["admin"])
+    invalid = client.post(
+        f"/alerts/{alert_id}/transition",
+        data={"status": "resolved"},
+    )
+    assert invalid.status_code == 400
+    with app.app_context():
+        assert db.session.get(SecurityAlert, alert_id).status == "open"
+        assert AuditLog.query.count() == 0
 
 
 def test_only_admin_can_change_simulated_remediation_workflow():
@@ -208,6 +311,86 @@ def test_only_admin_can_change_simulated_remediation_workflow():
         assert candidate.status == "verified"
         assert candidate.is_simulated is True
         assert "SIMULATED" in candidate.verification_note.upper()
+        rejected_candidate = PatchCandidate(
+            device_id=app.security_center_ids["device"],
+            cve_id="CVE-2025-54321",
+            component_name="Unverified component",
+            patch_source="no-verified-vendor-source",
+            evidence="Simulated review candidate.",
+            status="discovered",
+            is_simulated=True,
+        )
+        db.session.add(rejected_candidate)
+        db.session.commit()
+        rejected_candidate_id = rejected_candidate.id
+
+    authenticate(client, app.security_center_ids["viewer"])
+    viewer_rejection = client.post(
+        f"/remediation/{rejected_candidate_id}/reject"
+    )
+    assert viewer_rejection.status_code == 403
+
+    authenticate(client, app.security_center_ids["admin"])
+    rejection = client.post(
+        f"/remediation/{rejected_candidate_id}/reject",
+        follow_redirects=True,
+    )
+    assert rejection.status_code == 200
+    assert b"No device was changed" in rejection.data
+    with app.app_context():
+        rejected_candidate = db.session.get(
+            PatchCandidate,
+            rejected_candidate_id,
+        )
+        assert rejected_candidate.status == "rejected"
+        audit = AuditLog.query.filter_by(
+            entity_type="patch_candidate",
+            entity_id=str(rejected_candidate_id),
+            action="review_rejected",
+        ).one()
+        assert audit.user_id == app.security_center_ids["admin"]
+        assert "no patch was applied" in audit.details
+
+
+def test_source_backed_recommendation_requires_admin_review_and_never_claims_install():
+    app = make_app()
+    client = app.test_client()
+    candidate_id = app.security_center_ids["candidate"]
+    with app.app_context():
+        candidate = db.session.get(PatchCandidate, candidate_id)
+        candidate.is_simulated = False
+        candidate.patch_url = "https://vendor.example/security/advisory"
+        candidate.patch_source = "NVD-tagged-vendor-advisory"
+        candidate.recommended_version = ""
+        db.session.commit()
+
+    authenticate(client, app.security_center_ids["viewer"])
+    denied = client.post(
+        f"/remediation/{candidate_id}/approve-recommendation",
+    )
+    assert denied.status_code == 403
+
+    authenticate(client, app.security_center_ids["admin"])
+    page = client.get("/remediation")
+    assert page.status_code == 200
+    assert b"Review Required" in page.data
+    assert b"https://vendor.example/security/advisory" in page.data
+    approved = client.post(
+        f"/remediation/{candidate_id}/approve-recommendation",
+        follow_redirects=True,
+    )
+    assert approved.status_code == 200
+    assert b"No update was applied" in approved.data
+
+    with app.app_context():
+        candidate = db.session.get(PatchCandidate, candidate_id)
+        assert candidate.status == "approved"
+        assert candidate.approved_by == "operator"
+        assert "No firmware or software was installed" in candidate.verification_note
+        assert AuditLog.query.filter_by(
+            action="recommendation_approved",
+            entity_id=str(candidate_id),
+        ).count() == 1
 
 
 def test_nvd_sync_records_success_and_rejects_duplicate_submission(monkeypatch):

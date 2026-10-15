@@ -62,8 +62,8 @@
           <a class="ops-metric" href="{{ url_for('pages.cves') }}"><span>Stored CVEs</span><strong>{{ cve_count }}</strong><small>Local NVD catalog</small></a>
           <a class="ops-metric" href="{{ url_for('pages.devices') }}"><span>Confirmed device/CVE pairs</span><strong>{{ confirmed_device_cves }}</strong><small>Version applicability evaluated</small></a>
           <a class="ops-metric" href="{{ url_for('pages.cves', assessment='potential') }}"><span>Potential matches</span><strong>{{ potential_total }}</strong><small>Require verification</small></a>
-          <a class="ops-metric" href="{{ url_for('pages.alerts') }}"><span>Open alerts</span><strong>{{ dashboard_panels.open_alert_count }}</strong><small>Unacknowledged</small></a>
-          <a class="ops-metric" href="{{ url_for('pages.remediation') }}"><span>Awaiting review</span><strong>{{ dashboard_panels.pending_patch_count }}</strong><small>Includes simulated workflow items</small></a>
+          <a class="ops-metric" href="{{ url_for('pages.alerts', status='open') }}"><span>Open alerts</span><strong data-open-alert-count="{{ dashboard_panels.open_alert_count }}">{{ dashboard_panels.open_alert_count }}</strong><small>Unacknowledged</small></a>
+          <a class="ops-metric" href="{{ url_for('pages.remediation') }}"><span>Awaiting review</span><strong data-pending-review-count="{{ dashboard_panels.pending_patch_count }}">{{ dashboard_panels.pending_patch_count }}</strong><small>Discovered candidates; approval is not installation</small></a>
         </section>
         <p class="ops-sync-state">
           NVD sync:
@@ -72,6 +72,26 @@
           {% else %}
             no successful NVD sync recorded
           {% endif %}
+          {% if dashboard_panels.latest_nvd_attempt and dashboard_panels.latest_nvd_attempt.status == 'failed' %}
+            · latest attempt {{ dashboard_panels.latest_nvd_attempt.status }} at {{ dashboard_panels.latest_nvd_attempt.started_at.strftime('%Y-%m-%d %H:%M UTC') if dashboard_panels.latest_nvd_attempt.started_at else 'unknown time' }}
+          {% elif dashboard_panels.latest_nvd_attempt %}
+            · latest attempt {{ dashboard_panels.latest_nvd_attempt.status }} at {{ dashboard_panels.latest_nvd_attempt.started_at.strftime('%Y-%m-%d %H:%M UTC') if dashboard_panels.latest_nvd_attempt.started_at else 'unknown time' }}
+          {% endif %}
+          · CISA KEV:
+          {% if dashboard_panels.latest_kev_sync and dashboard_panels.latest_kev_sync.completed_at %}
+            last success {{ dashboard_panels.latest_kev_sync.completed_at.strftime('%Y-%m-%d %H:%M UTC') }} · {{ 'updated within 24h' if dashboard_panels.kev_catalog_fresh else 'older than 24h' }}
+          {% else %}
+            no successful sync recorded · status unavailable
+          {% endif %}
+          {% if dashboard_panels.latest_kev_attempt and dashboard_panels.latest_kev_attempt.status == 'failed' %}
+            · latest attempt {{ dashboard_panels.latest_kev_attempt.status }} at {{ dashboard_panels.latest_kev_attempt.started_at.strftime('%Y-%m-%d %H:%M UTC') if dashboard_panels.latest_kev_attempt.started_at else 'unknown time' }}
+          {% elif dashboard_panels.latest_kev_attempt %}
+            · latest attempt {{ dashboard_panels.latest_kev_attempt.status }} at {{ dashboard_panels.latest_kev_attempt.started_at.strftime('%Y-%m-%d %H:%M UTC') if dashboard_panels.latest_kev_attempt.started_at else 'unknown time' }}
+          {% endif %}
+        </p>
+        <p class="summary-disclaimer">
+          KEV freshness reflects the last successful feed fetch only. Stored KEV
+          entries are updated but not removed when absent from a later feed.
         </p>
         <section class="severity-grid" aria-label="Latest per-device severity totals">
           {% for level, color, icon in (('critical', 'critical', '◆'), ('high', 'high', '▲'), ('medium', 'medium', '●'), ('low', 'low', '━')) %}
@@ -151,7 +171,7 @@
                 {% for device in dashboard_panels.devices %}
                   <li>
                     <span class="device-status-dot" aria-hidden="true"></span>
-                    <a href="{{ url_for('pages.device_detail', device_id=device.id) }}"><strong>{{ device.name }}</strong><small>{{ device.vendor }} · {{ device.model }}</small></a>
+                    <a href="{{ url_for('pages.device_detail', device_id=device.id) }}"><strong>{{ device.name }}</strong><small>{{ device.vendor }} · {{ device.model }}</small>{% if device.simulation_status == 'simulated' %}<small>SIMULATED DEVICE</small>{% elif device.simulation_status == 'unknown' %}<small>Simulation status unknown</small>{% endif %}</a>
                   </li>
                 {% endfor %}
               </ul>
@@ -167,12 +187,12 @@
           <div class="panel-heading">
             <div>
               <h2 id="telemetry-title">Simulated solar telemetry</h2>
-              <p>SolarGuard-01 · SMA Solar Technology · Sunny Boy TL-21</p>
+              <p>SolarGuard-01 · Espressif ESP32 development-board simulation · solar-monitoring scenario only</p>
             </div>
-            <span class="simulation-badge" data-telemetry-source>SIMULATED TELEMETRY</span>
+            <span class="simulation-badge" data-telemetry-source>SIMULATED DEVICE · TELEMETRY</span>
           </div>
           <p class="telemetry-disclaimer">
-            All readings are simulated. MQTT readings originate from the Wokwi ESP32; the local demo uses fixed synthetic values and makes no broker or hardware connection. Solar asset labels are not verified SMA measurements or inverter firmware.
+            All readings are simulated. MQTT messages arrive through a public, unauthenticated broker and cannot independently prove the sender is Wokwi. The local demo uses fixed synthetic values and makes no broker or hardware connection. Solar asset labels are not verified SMA measurements or inverter firmware.
           </p>
           <div class="telemetry-metrics" aria-live="polite">
             <article class="telemetry-metric">
@@ -193,12 +213,16 @@
             </article>
           </div>
           <p class="telemetry-last-received">Last received: <time data-telemetry-received>--</time></p>
+          <p>Message ID: <code data-telemetry-message-id>--</code></p>
+          <p>Reading time evidence: <span data-telemetry-timestamp-source>Unknown</span></p>
           <div class="telemetry-runtime">
             <h3>ESP32 runtime information</h3>
             <p>Chip: <span data-telemetry-chip>--</span></p>
             <p>Arduino ESP32 core: <span data-telemetry-arduino>--</span></p>
             <p>ESP-IDF: <span data-telemetry-idf>--</span></p>
-            <p class="telemetry-disclaimer">The ESP32 runtime versions are not the SMA inverter's firmware version. Component inventory is incomplete until additional software is identified.</p>
+            <p>Runtime evidence: <span data-telemetry-evidence>Awaiting a telemetry event.</span></p>
+            <p>Represented inverter product firmware: <span data-product-firmware>Unknown; no physical inverter or exact model is identified.</span></p>
+            <p class="telemetry-disclaimer">The ESP32 runtime versions are not the SMA inverter's firmware version. Reported values are not independently verified; component inventory is incomplete until additional software is identified.</p>
           </div>
           <div class="telemetry-history">
             <h3>Recent simulated readings <small>Updates every 3 seconds</small></h3>
@@ -273,26 +297,123 @@
               {% endif %}
             </article>
 
-            <article class="dashboard-panel alerts-panel" id="recent-alerts">
+            <article class="dashboard-panel alerts-panel" id="open-alerts-panel">
               <div class="panel-heading">
-                <div><h2>Recent alerts</h2><p>Latest scan status updates</p></div>
-                <a class="text-link" href="{{ url_for('pages.scans') }}">View all <span aria-hidden="true">→</span></a>
+                <div><h2>Open Alerts</h2><p>{{ dashboard_panels.open_alert_count }} currently open</p></div>
+                <a class="text-link" href="{{ url_for('pages.alerts', status='open') }}">View alerts <span aria-hidden="true">→</span></a>
               </div>
-              {% if dashboard_panels.recent_alerts %}
+              {% if dashboard_panels.open_alerts %}
                 <ul class="alert-list">
-                    {% for alert in dashboard_panels.recent_alerts %}
+                    {% for alert in dashboard_panels.open_alerts %}
                       <li>
                         <span class="alert-icon {{ alert.severity|lower }}" aria-hidden="true">{% if alert.severity|lower in ('critical', 'high') %}!{% else %}•{% endif %}</span>
-                        <a href="{{ url_for('pages.alerts') }}"><strong>{{ alert.title }}</strong><small>{{ alert.severity|title }} · {{ alert.status|title }} · {{ alert.device.name if alert.device else 'Unknown device' }}{% if alert.cve_id %} · {{ alert.cve_id }}{% endif %}</small></a>
-                        <time>{{ alert.created_at.strftime('%m-%d %H:%M') if alert.created_at else '—' }}</time>
+                        <a href="{{ url_for('pages.alert_detail', alert_id=alert.id) }}"><strong>{{ alert.title }}</strong><small>{{ alert.severity|title }} · {{ alert.device.name if alert.device else 'Unknown device' }}{% if alert.cve_id %} · {{ alert.cve_id }}{% endif %}</small><small>Status: {{ alert.status|title }}</small></a>
+                        <time datetime="{{ alert.created_at.isoformat() if alert.created_at else '' }}">{{ alert.created_at.strftime('%m-%d %H:%M') if alert.created_at else '—' }}</time>
                       </li>
                     {% endfor %}
                   </ul>
                 {% else %}
-                  <p class="empty-state">No security alerts are recorded.</p>
+                  <p class="empty-state">No open alerts. Resolved or acknowledged alerts are not counted here.</p>
               {% endif %}
             </article>
           </div>
+        </section>
+        <section class="workflow-grid" aria-label="Review, activity, and remediation">
+          <article class="dashboard-panel workflow-panel" id="awaiting-review-panel">
+            <div class="panel-heading">
+              <div><h2>Awaiting Review</h2><p>Discovered patch candidates not yet approved or rejected</p></div>
+              <a class="text-link" href="{{ url_for('pages.remediation') }}">Review all <span aria-hidden="true">→</span></a>
+            </div>
+            {% if dashboard_panels.pending_patch_candidates %}
+              <ul class="workflow-list">
+                {% for candidate in dashboard_panels.pending_patch_candidates %}
+                  <li>
+                    <div>
+                      <strong>{{ candidate.cve_id or 'Unlinked candidate' }} · {{ candidate.component_name }}</strong>
+                      <small>{{ candidate.device.name if candidate.device else 'Unknown device' }} · {{ 'Simulated workflow' if candidate.is_simulated else 'Source-backed' }} · {{ 'Review Required' if candidate.status == 'discovered' else candidate.status|replace('_', ' ')|title }}</small>
+                    </div>
+                    {% if current_user.is_admin and candidate.is_simulated %}
+                      <div class="workflow-actions">
+                        <form method="post" action="{{ url_for('pages.approve_simulated_patch', candidate_id=candidate.id) }}" data-confirm="Record simulated approval only? No device update will occur.">
+                          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                          <button class="button secondary" type="submit">Approve</button>
+                        </form>
+                        <form method="post" action="{{ url_for('pages.reject_simulated_patch', candidate_id=candidate.id) }}" data-confirm="Reject this simulated workflow candidate? No device change will occur.">
+                          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                          <button class="button secondary" type="submit">Reject</button>
+                        </form>
+                      </div>
+                    {% elif current_user.is_admin and not candidate.is_simulated and candidate.status == 'discovered' %}
+                      <a class="status-badge pending" href="{{ url_for('pages.remediation') }}">Review source</a>
+                    {% else %}
+                      <span class="status-badge pending">Review required</span>
+                    {% endif %}
+                  </li>
+                {% endfor %}
+              </ul>
+            {% else %}
+              <p class="empty-state">No discovered candidates are awaiting review.</p>
+            {% endif %}
+            <p class="panel-footnote">Source-backed approvals authorize follow-up only. Simulated decisions never change a device; neither workflow installs a patch.</p>
+          </article>
+
+          <article class="dashboard-panel workflow-panel" id="recent-activity-panel">
+            <div class="panel-heading">
+              <div><h2>Updates &amp; Recent Activity</h2><p>Latest saved scan, sync, telemetry, alert, and remediation records</p></div>
+            </div>
+            {% if dashboard_panels.recent_activity %}
+              <ol class="activity-list">
+                {% for event in dashboard_panels.recent_activity %}
+                  <li>
+                    <div>
+                      {% if event.kind == 'scan' %}
+                        <a href="{{ url_for('pages.scan_detail', scan_id=event.record_id) }}"><strong>{{ event.title }}</strong></a>
+                      {% elif event.kind == 'alert' %}
+                        <a href="{{ url_for('pages.alert_detail', alert_id=event.record_id) }}"><strong>{{ event.title }}</strong></a>
+                      {% elif event.kind == 'telemetry' and event.device_id %}
+                        <a href="{{ url_for('pages.device_detail', device_id=event.device_id) }}"><strong>{{ event.title }}</strong></a>
+                      {% elif event.kind == 'remediation' %}
+                        <a href="{{ url_for('pages.remediation') }}"><strong>{{ event.title }}</strong></a>
+                      {% else %}
+                        <a href="{{ url_for('pages.cves') }}"><strong>{{ event.title }}</strong></a>
+                      {% endif %}
+                      <small>{{ event.detail }}</small>
+                    </div>
+                    <div class="activity-event-meta">
+                      <span class="status-badge {{ event.status|lower|replace(' ', '-') }}">{{ event.status|replace('_', ' ')|title }}</span>
+                      <time datetime="{{ event.timestamp.isoformat() if event.timestamp else '' }}">{{ event.timestamp.strftime('%Y-%m-%d %H:%M') if event.timestamp else 'Time unavailable' }}</time>
+                    </div>
+                  </li>
+                {% endfor %}
+              </ol>
+            {% else %}
+              <p class="empty-state">No scan, sync, telemetry, alert, or remediation activity is recorded yet.</p>
+            {% endif %}
+          </article>
+
+          <article class="dashboard-panel workflow-panel" id="remediation-panel">
+            <div class="panel-heading">
+              <div><h2>Fixes &amp; Remediation</h2><p>Stored workflow states; no dashboard action installs a patch</p></div>
+              <a class="text-link" href="{{ url_for('pages.remediation') }}">Open center <span aria-hidden="true">→</span></a>
+            </div>
+            {% if dashboard_panels.recent_remediation %}
+              <ul class="workflow-list">
+                {% for candidate in dashboard_panels.recent_remediation %}
+                  <li>
+                    <div>
+                      <strong>{{ candidate.cve_id or 'No CVE linked' }} · {{ candidate.component_name }}</strong>
+                      <small>{{ candidate.device.name if candidate.device else 'Unknown device' }} · {{ candidate.recommended_version or 'No verified fixed version recorded' }}</small>
+                      {% if candidate.verification_note %}<small>{{ candidate.verification_note }}</small>{% endif %}
+                    </div>
+                    <span class="status-badge {{ 'pending' if candidate.status in ('discovered', 'approved') else 'completed' }}">{{ 'SIMULATED · ' if candidate.is_simulated else '' }}{{ candidate.status|replace('_', ' ')|title }}</span>
+                  </li>
+                {% endfor %}
+              </ul>
+            {% else %}
+              <p class="empty-state">No remediation candidates are recorded. No patch or fixed version is invented.</p>
+            {% endif %}
+            <p class="panel-footnote">A “verified” simulated status is only a demo workflow result, not proof of a device update. Non-simulated verification evidence must be reviewed in its source record.</p>
+          </article>
         </section>
         <p class="dashboard-footnote">Evaluated CPE/version matches indicate NVD configuration applicability only; device identity and exploitability are not independently verified.</p>
       </section>

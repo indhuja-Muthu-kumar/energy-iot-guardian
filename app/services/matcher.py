@@ -242,6 +242,24 @@ def _evaluate_criterion(criterion: dict, device) -> _CPEEvaluation:
             ),
         )
 
+    firmware_status = getattr(device, "firmware_verification_status", None)
+    if (
+        firmware_status is not None
+        and str(firmware_status).upper() != "VERIFIED"
+    ):
+        range_result = "inside" if firmware_match else "outside"
+        return _CPEEvaluation(
+            value=None,
+            has_product_match=True,
+            has_vulnerable_candidate=vulnerable,
+            uncertain=True,
+            evidence=(
+                f"Reported firmware {firmware} appears {range_result} the NVD "
+                f"version range, but evidence state {firmware_status} is not "
+                "verified; applicability cannot be confirmed or ruled out.",
+            ),
+        )
+
     if firmware_match:
         kind = "vulnerable" if vulnerable else "non-vulnerable context"
         return _CPEEvaluation(

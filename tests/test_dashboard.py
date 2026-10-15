@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 from app import create_app
 from app.extensions import db
+from app.models.alert import SecurityAlert
 from app.models.cve import CVE
 from app.models.device import Device
 from app.models.finding import Finding
+from app.models.patch import PatchCandidate
 from app.models.scan import Scan
+from app.models.sync_log import SyncLog
+from app.models.telemetry import TelemetryReading
 from app.models.user import User
 
 
@@ -30,13 +36,19 @@ def authenticate(client, user_id):
         session["_fresh"] = True
 
 
-def add_device(name, firmware="unknown", firmware_version=None):
+def add_device(
+    name,
+    firmware="unknown",
+    firmware_version=None,
+    firmware_verification_status="UNKNOWN",
+):
     device = Device(
         name=name,
         vendor="SMA Solar Technology",
         model="Sunny Boy TL-21",
         firmware=firmware,
         firmware_version=firmware_version,
+        firmware_verification_status=firmware_verification_status,
     )
     db.session.add(device)
     db.session.flush()
@@ -100,7 +112,11 @@ def completed_scan(device):
 def test_dashboard_severity_summary_separates_evaluated_and_potential():
     app = make_dashboard_app()
     with app.app_context():
-        device = add_device("Severity device", firmware="1.2.3")
+        device = add_device(
+            "Severity device",
+            firmware="1.2.3",
+            firmware_verification_status="VERIFIED",
+        )
         scan = completed_scan(device)
         for index, severity in enumerate(
             ("CRITICAL", "HIGH", "MEDIUM", "LOW"),
@@ -308,14 +324,52 @@ def test_dashboard_includes_clearly_labeled_simulated_telemetry():
     assert response.status_code == 200
     assert "Simulated solar telemetry" in html
     assert "SolarGuard-01" in html
-    assert "SMA Solar Technology" in html
-    assert "Sunny Boy TL-21" in html
+    assert "Espressif" in html
+    assert "ESP32 development-board simulation" in html
+    assert "Represented inverter product firmware:" in html
+    assert "Unknown; no physical inverter or exact model is identified." in html
     assert "SIMULATED" in html
-    assert "MQTT readings originate from the Wokwi ESP32" in html
+    assert "SIMULATED DEVICE · TELEMETRY" in html
+    assert "public, unauthenticated broker" in html
+    assert "cannot independently prove the sender is Wokwi" in html
     assert "local demo uses fixed synthetic values" in html
     assert "not verified SMA measurements or inverter firmware" in html
     assert "data-telemetry-source" in html
     assert "Voltage" in html
+
+
+def test_dashboard_distinguishes_kev_last_success_from_failed_latest_attempt():
+    app = make_dashboard_app()
+    now = datetime.now(UTC).replace(tzinfo=None)
+    with app.app_context():
+        db.session.add_all([
+            SyncLog(
+                source="kev",
+                status="success",
+                records_processed=100,
+                started_at=now - timedelta(days=3),
+                completed_at=now - timedelta(days=3),
+            ),
+            SyncLog(
+                source="kev",
+                status="failed",
+                details="ConnectionError",
+                records_processed=0,
+                started_at=now,
+                completed_at=now,
+            ),
+        ])
+        db.session.commit()
+
+    client = app.test_client()
+    authenticate(client, app.dashboard_user_id)
+    response = client.get("/dashboard")
+
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+    assert "older than 24h" in html
+    assert "latest attempt failed" in html
+    assert "last success" in html
     assert "Current" in html
     assert "Calculated power" in html
     assert "Demo status" in html
@@ -343,7 +397,7 @@ def test_dashboard_handles_missing_device_relationship_in_recent_scans():
     assert b"Unknown device" in response.data
 
 
-def test_dashboard_uses_latest_scan_firmware_result_and_legacy_fallback(monkeypatch):
+def test_dashboard_does_not_confirm_legacy_firmware_without_evidence(monkeypatch):
     app = make_dashboard_app()
     with app.app_context():
         device = add_device("Legacy device", firmware="1.5.0")
@@ -390,7 +444,8 @@ def test_dashboard_uses_latest_scan_firmware_result_and_legacy_fallback(monkeypa
     client = app.test_client()
     authenticate(client, app.dashboard_user_id)
     summary = client.get("/api/dashboard").json["vulnerability_summary"]
-    assert summary["severity"]["high"]["evaluated"] == 1
+    assert summary["severity"]["high"]["evaluated"] == 0
+    assert summary["severity"]["high"]["potential"] == 1
 
 
 def test_dashboard_prefers_current_firmware_version_for_applicability():
@@ -416,7 +471,7 @@ def test_dashboard_prefers_current_firmware_version_for_applicability():
     authenticate(client, app.dashboard_user_id)
     summary = client.get("/api/dashboard").json["vulnerability_summary"]
     assert summary["severity"]["high"]["evaluated"] == 0
-    assert summary["severity"]["high"]["potential"] == 0
+    assert summary["severity"]["high"]["potential"] == 1
 
 
 def test_dashboard_unknown_firmware_is_potential_not_evaluated(monkeypatch):
@@ -499,7 +554,8 @@ def test_dashboard_counts_duplicate_cves_once_per_device_and_scan():
     client = app.test_client()
     authenticate(client, app.dashboard_user_id)
     summary = client.get("/api/dashboard").json["vulnerability_summary"]
-    assert summary["severity"]["critical"]["evaluated"] == 1
+    assert summary["severity"]["critical"]["evaluated"] == 0
+    assert summary["severity"]["critical"]["potential"] == 1
 
 
 def test_dashboard_uses_newest_completed_scan_per_device():
@@ -587,3 +643,158 @@ def test_dashboard_empty_state_and_page_scope_are_clear():
         db.session.commit()
     no_scans_page = client.get("/dashboard")
     assert b"No device has a completed latest scan yet" in no_scans_page.data
+
+
+def test_dashboard_workflow_sections_use_saved_open_alerts_and_candidates():
+    app = make_dashboard_app()
+    with app.app_context():
+        user = db.session.get(User, app.dashboard_user_id)
+        user.is_admin = True
+        device = add_device("Workflow inverter")
+        now = datetime.now(UTC).replace(tzinfo=None)
+        open_alert = SecurityAlert(
+            device_id=device.id,
+            cve_id="CVE-2026-1001",
+            severity="high",
+            title="Open workflow alert",
+            summary="Stored open alert",
+            dedupe_key="workflow-open",
+            status="open",
+            created_at=now,
+        )
+        resolved_alert = SecurityAlert(
+            device_id=device.id,
+            cve_id="CVE-2026-1002",
+            severity="medium",
+            title="Resolved workflow alert",
+            summary="Stored resolved alert",
+            dedupe_key="workflow-resolved",
+            status="resolved",
+            created_at=now,
+        )
+        pending_candidate = PatchCandidate(
+            device_id=device.id,
+            cve_id="CVE-2026-1001",
+            component_name="Unverified component",
+            patch_source="no-verified-vendor-source",
+            evidence="Simulated candidate awaiting review",
+            status="discovered",
+            is_simulated=True,
+            created_at=now,
+            updated_at=now,
+        )
+        approved_candidate = PatchCandidate(
+            device_id=device.id,
+            cve_id="CVE-2026-1003",
+            component_name="Unverified component",
+            patch_source="no-verified-vendor-source",
+            evidence="Simulated approval is not installation",
+            status="approved",
+            is_simulated=True,
+            created_at=now,
+            updated_at=now,
+        )
+        sync = SyncLog(
+            source="kev",
+            status="failed",
+            details="Network failure",
+            records_processed=0,
+            started_at=now,
+            completed_at=now,
+        )
+        reading = TelemetryReading(
+            device_id=device.id,
+            source_message_id="workflow-telemetry-1",
+            voltage=230.0,
+            current=2.0,
+            power=460.0,
+            timestamp=now,
+            received_at=now,
+            ingest_source="mqtt",
+            telemetry_status="SIMULATED",
+            chip_model="ESP32",
+            chip_revision=1,
+            arduino_core_version="3.0.0",
+            esp_idf_version="5.1.0",
+        )
+        scan = Scan(
+            device_id=device.id,
+            status="failed",
+            scan_type="device",
+            summary="NVD request failed",
+            created_at=now,
+            started_at=now,
+            completed_at=now,
+        )
+        db.session.add_all([
+            open_alert,
+            resolved_alert,
+            pending_candidate,
+            approved_candidate,
+            sync,
+            reading,
+            scan,
+        ])
+        db.session.commit()
+        pending_candidate_id = pending_candidate.id
+        open_alert_id = open_alert.id
+
+    client = app.test_client()
+    authenticate(client, app.dashboard_user_id)
+    response = client.get("/dashboard")
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert 'data-open-alert-count="1">1</strong>' in html
+    assert 'data-pending-review-count="1">1</strong>' in html
+    open_panel = html.split('id="open-alerts-panel"', 1)[1].split(
+        "</article>", 1
+    )[0]
+    assert "Open workflow alert" in open_panel
+    assert "High" in open_panel
+    assert "Workflow inverter" in open_panel
+    assert "Open" in open_panel
+    assert "Resolved workflow alert" not in open_panel
+    assert 'href="/alerts?status=open"' in html
+    assert f'href="/alerts/{open_alert_id}"' in open_panel
+
+    review_panel = html.split('id="awaiting-review-panel"', 1)[1].split(
+        "</article>", 1
+    )[0]
+    assert "CVE-2026-1001" in review_panel
+    assert "CVE-2026-1003" not in review_panel
+    assert f'action="/remediation/{pending_candidate_id}/approve"' in review_panel
+    assert f'action="/remediation/{pending_candidate_id}/reject"' in review_panel
+
+    activity_panel = html.split('id="recent-activity-panel"', 1)[1].split(
+        "</article>", 1
+    )[0]
+    assert "NVD CVE sync" not in activity_panel
+    assert "CISA KEV sync" in activity_panel
+    assert "Failed" in activity_panel
+    assert "Simulated telemetry received" in activity_panel
+    assert "Device scan" in activity_panel
+    assert "Open workflow alert" in activity_panel
+    assert "SIMULATED remediation" in activity_panel
+
+    remediation_panel = html.split('id="remediation-panel"', 1)[1].split(
+        "</article>", 1
+    )[0]
+    assert "SIMULATED · Approved" in remediation_panel
+    assert "SIMULATED · Discovered" in remediation_panel
+    assert "not proof of a device update" in remediation_panel
+
+
+def test_dashboard_workflow_sections_show_empty_states():
+    app = make_dashboard_app()
+    client = app.test_client()
+    authenticate(client, app.dashboard_user_id)
+
+    response = client.get("/dashboard")
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert "No open alerts." in html
+    assert "No discovered candidates are awaiting review." in html
+    assert "No scan, sync, telemetry, alert, or remediation activity" in html
+    assert "No remediation candidates are recorded." in html

@@ -4,7 +4,7 @@ from flask_login import login_required
 
 from app.extensions import db
 from app.models.scan import Scan
-from app.services.report_service import export_csv
+from app.services.report_service import export_csv, export_full_csv
 
 api_reports_bp = Blueprint("api_reports", __name__)
 
@@ -42,3 +42,17 @@ def export_report_csv():
 @login_required
 def report_summary():
     return jsonify({"status": "ok", "message": "Report generator ready."})
+
+
+@api_reports_bp.get("/full.csv")
+@login_required
+def export_full_report_csv():
+    return Response(
+        export_full_csv(),
+        mimetype="text/csv",
+        headers={
+            "Content-Disposition": (
+                "attachment; filename=energy_iot_full_report.csv"
+            )
+        },
+    )

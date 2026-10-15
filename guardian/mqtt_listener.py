@@ -1,152 +1,113 @@
 
 import json
 import os
-
+import sys
 import paho.mqtt.client as mqtt
-from dotenv import load_dotenv
 
-load_dotenv()
-
-DEFAULT_BROKER = os.getenv(
+BROKER = os.getenv(
     "TELEMETRY_MQTT_BROKER_HOST",
-    os.getenv("ENERGY_GUARDIAN_MQTT_BROKER", "test.mosquitto.org"),
+    os.getenv("ENERGY_GUARDIAN_MQTT_BROKER", "test.mosquitto.org")
 )
 
-DEFAULT_PORT = int(
-    os.getenv(
-        "TELEMETRY_MQTT_BROKER_PORT",
-        os.getenv("ENERGY_GUARDIAN_MQTT_PORT", "1883"),
-    )
-)
+PORT = int(os.getenv("TELEMETRY_MQTT_BROKER_PORT", "1883"))
 
-DEFAULT_TOPIC = os.getenv(
+TOPIC = os.getenv(
     "TELEMETRY_MQTT_TOPIC",
-    os.getenv(
-        "ENERGY_GUARDIAN_MQTT_TOPIC",
-        "energy-iot-cve-monitor/477780562303197185/SolarGuard-01/telemetry",
-    ),
+    "energy-iot-cve-monitor/477868883321291777/SolarGuard-01/telemetry"
 )
+DEFAULT_TOPIC = TOPIC
+
+CLIENT_ID = "Guardian-Python-Receiver-Star-2026"
 
 
 def on_connect(client, userdata, flags, reason_code, properties):
-    if hasattr(reason_code, "is_failure"):
-        failed = reason_code.is_failure
-    else:
-        failed = reason_code != 0
-
-    if failed:
-        print("MQTT connection failed:", reason_code)
+    if reason_code.is_failure:
+        print(f"MQTT connection failed: {reason_code}")
         return
 
     print("Energy-IoT Guardian connected!")
+    print(f"Broker: {BROKER}:{PORT}")
+    print(f"Subscribing to: {TOPIC}")
 
-    result, message_id = client.subscribe(DEFAULT_TOPIC, qos=0)
+    result, mid = client.subscribe(TOPIC, qos=0)
 
     if result == mqtt.MQTT_ERR_SUCCESS:
-        print(
-            f"Subscription request sent for {DEFAULT_TOPIC} "
-            f"(message_id={message_id}); waiting for broker acknowledgement."
-        )
+        print("Subscription request sent; waiting for broker acknowledgement.")
     else:
-        print(f"Subscription request failed for {DEFAULT_TOPIC}: {result}")
+        print(f"Subscription failed: {result}")
 
 
-def on_subscribe(client, userdata, message_id, reason_codes, properties):
-    if any(reason_code.is_failure for reason_code in reason_codes):
-        print(
-            "Broker rejected subscription "
-            f"(message_id={message_id}, reasons={reason_codes})"
-        )
-        return
-    print(
-        f"Broker acknowledged subscription "
-        f"(message_id={message_id}, reasons={reason_codes})"
-    )
-
-
-def print_telemetry(payload):
-    if not isinstance(payload, dict):
-        print("Invalid telemetry: expected a JSON object")
-        return
-
-    print("\n--- Solar Inverter Telemetry ---")
-    print("Device:", payload.get("device_id", "Unknown"))
-    print("Manufacturer:", payload.get("manufacturer", "Unknown"))
-    print("Model:", payload.get("model", "Unknown"))
-    print("Voltage:", payload.get("voltage", "N/A"), "V")
-    print("Current:", payload.get("current", "N/A"), "A")
-    print("Power:", payload.get("power", "N/A"), "W")
-    print("Timestamp:", payload.get("timestamp", "Unknown"))
-    print("Status:", payload.get("telemetry_status", "Unknown"))
+def on_subscribe(client, userdata, mid, reason_code_list, properties):
+    if any(reason_code.is_failure for reason_code in reason_code_list):
+        print(f"Broker rejected subscription: {reason_code_list}")
+    else:
+        print(f"Broker acknowledged subscription: {reason_code_list}")
 
 
 def on_message(client, userdata, message):
-    print("\nMESSAGE RECEIVED!")
-    print("Topic:", message.topic)
-
+    print("\n" + "=" * 55)
+    print("MESSAGE RECEIVED!")
+    print(f"Topic: {message.topic}")
 
     try:
-        raw_payload = message.payload.decode("utf-8")
-        print("RAW MQTT MESSAGE:", raw_payload)
-        data = json.loads(raw_payload)
-        print_telemetry(data)
+        payload = message.payload.decode("utf-8")
+        data = json.loads(payload)
 
-    except UnicodeDecodeError as error:
-        print("Invalid telemetry: payload is not UTF-8:", error)
-    except json.JSONDecodeError as error:
-        print("Invalid JSON:", error)
+        print("\nDevice:", data.get("device_id", "Unknown"))
+        print("Manufacturer:", data.get("manufacturer", "Unknown"))
+        print("Model:", data.get("model", "Unknown"))
+        print("Voltage:", data.get("voltage", "N/A"), "V")
+        print("Current:", data.get("current", "N/A"), "A")
+        print("Power:", data.get("power", "N/A"), "W")
+        print("Status:", data.get("telemetry_status", "Unknown"))
+
+    except UnicodeDecodeError:
+        print("Received payload is not UTF-8.")
+    except json.JSONDecodeError:
+        print("Received non-JSON or invalid message.")
+
+    print("=" * 55)
 
 
 def on_disconnect(client, userdata, disconnect_flags, reason_code, properties):
-    if hasattr(reason_code, "is_failure"):
-        failed = reason_code.is_failure
+    if reason_code.is_failure:
+        print(f"MQTT disconnected unexpectedly: {reason_code}")
     else:
-        failed = reason_code != 0
-
-    if failed:
-        print("MQTT disconnected unexpectedly:", reason_code)
-    else:
-        print("MQTT disconnected:", reason_code)
-
-
-def create_client(client_id="Guardian-Python-Receiver"):
-    client = mqtt.Client(
-        mqtt.CallbackAPIVersion.VERSION2,
-        client_id=client_id,
-    )
-
-    client.on_connect = on_connect
-    client.on_subscribe = on_subscribe
-    client.on_message = on_message
-    client.on_disconnect = on_disconnect
-    client.reconnect_delay_set(min_delay=1, max_delay=30)
-
-    return client
+        print(f"MQTT disconnected: {reason_code}")
 
 
 def main():
-    client = create_client()
-
-    print(
-        f"Connecting to MQTT broker "
-        f"{DEFAULT_BROKER}:{DEFAULT_PORT}..."
-    )
-
-    print(f"Listening on topic: {DEFAULT_TOPIC}")
+    print(f"Connecting to MQTT broker: {BROKER}:{PORT}")
+    print(f"Listening on topic: {TOPIC}")
 
     try:
-        client.connect_async(DEFAULT_BROKER, DEFAULT_PORT, 60)
-        client.loop_forever(retry_first_connection=True)
+        client = mqtt.Client(
+            callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
+            client_id=CLIENT_ID,
+            protocol=mqtt.MQTTv311
+        )
+
+        client.on_connect = on_connect
+        client.on_subscribe = on_subscribe
+        client.on_message = on_message
+        client.on_disconnect = on_disconnect
+
+        client.reconnect_delay_set(min_delay=1, max_delay=10)
+
+        client.connect(BROKER, PORT, keepalive=60)
+
+        print("Waiting for Wokwi ESP32 telemetry...")
+        client.loop_forever()
 
     except KeyboardInterrupt:
         print("\nStopping MQTT listener...")
 
-    except (OSError, mqtt.MQTTException) as error:
-        print("Unable to connect to MQTT broker:", error)
+    except (OSError, ValueError, mqtt.MQTTException) as error:
+        print(f"MQTT error: {error}")
+        sys.exit(1)
 
     finally:
-        client.disconnect()
-        print("MQTT listener stopped.")
+        print("Listener stopped.")
 
 
 if __name__ == "__main__":

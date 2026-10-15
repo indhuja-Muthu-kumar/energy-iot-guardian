@@ -1,9 +1,10 @@
 {% extends "base.html" %}
 {% block content %}
   <p class="section-kicker">REPORTING &amp; EXPORTS</p>
-  <div class="page-heading"><div><h1 class="page-title">Reports</h1><p class="page-description">Export persisted scan findings for review and sharing.</p></div>
-    <a class="button report-export-all" href="{{ url_for('api_reports.export_report_csv') }}"><span aria-hidden="true">↓</span> Export all findings</a>
+  <div class="page-heading"><div><h1 class="page-title">Reports</h1><p class="page-description">Export persisted inventory, telemetry, findings, alerts, remediation records, sync history, and audit events.</p></div>
+    <div class="filter-actions"><a class="button report-export-all" href="{{ url_for('api_reports.export_full_report_csv') }}"><span aria-hidden="true">↓</span> Export full report</a><a class="button secondary" href="{{ url_for('api_reports.export_report_csv') }}">Export findings only</a></div>
   </div>
+  <p class="summary-disclaimer">CSV includes generation timestamps and limitation labels. Telemetry is simulated, firmware may be reported rather than verified, and catalog freshness may be unknown.</p>
   <section class="card report-export-panel">
     <div class="panel-header"><div><h2>Export a scan report</h2><p>Choose a scan to download only its findings.</p></div></div>
     {% if scans %}

@@ -6,12 +6,12 @@
     <div><h1 class="page-title">Security alerts</h1><p class="page-description">Deduplicated alerts generated from stored device findings. Alerts indicate review work, not proof of exploitation.</p></div>
   </div>
   <section class="card" aria-labelledby="alert-filter-heading">
-    <div class="panel-header"><div><h2 id="alert-filter-heading">Alert queue</h2><p>Review actual records and mark open items acknowledged or unread.</p></div></div>
+    <div class="panel-header"><div><h2 id="alert-filter-heading">Alert queue</h2><p>Review persisted vulnerability and telemetry alerts and their incident timelines.</p></div></div>
     <form method="get" class="filter-grid compact-filter">
       <label>Status
         <select name="status">
           <option value="">All statuses</option>
-          {% for value in ('open', 'acknowledged', 'resolved') %}<option value="{{ value }}" {{ 'selected' if status_filter == value else '' }}>{{ value|title }}</option>{% endfor %}
+          {% for value in ('open', 'acknowledged', 'in_progress', 'resolved') %}<option value="{{ value }}" {{ 'selected' if status_filter == value else '' }}>{{ value|replace('_', ' ')|title }}</option>{% endfor %}
         </select>
       </label>
       <label>Severity
@@ -19,6 +19,21 @@
           <option value="">Any severity</option>
           {% for value in ('critical', 'high', 'medium', 'low', 'unknown') %}<option value="{{ value }}" {{ 'selected' if severity_filter == value else '' }}>{{ value|title }}</option>{% endfor %}
         </select>
+      </label>
+      <label>Category
+        <select name="type">
+          <option value="">Any category</option>
+          {% for value in ('cve', 'telemetry', 'firmware', 'mqtt', 'acknowledgement', 'system') %}<option value="{{ value }}" {{ 'selected' if type_filter == value else '' }}>{{ value|title }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>Device
+        <select name="device">
+          <option value="">All devices</option>
+          {% for device in devices %}<option value="{{ device.id }}" {{ 'selected' if device_filter == device.id|string else '' }}>{{ device.name }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>Search
+        <input type="search" name="q" maxlength="120" value="{{ search }}" placeholder="Alert, CVE, or evidence">
       </label>
       <div class="filter-actions"><button type="submit">Filter alerts</button><a class="button secondary" href="{{ url_for('pages.alerts') }}">Clear</a></div>
     </form>
@@ -31,7 +46,7 @@
               {% set finding = latest_findings.get((alert.device_id, alert.cve_id)) if alert.cve_id else none %}
               {% set candidate = patches.get((alert.device_id, alert.cve_id)) if alert.cve_id else none %}
               <tr>
-                <td data-label="Alert"><strong>{{ alert.title }}</strong><small>{{ alert.summary }}</small></td>
+                <td data-label="Alert"><a href="{{ url_for('pages.alert_detail', alert_id=alert.id) }}"><strong>{{ alert.title }}</strong></a><small>{{ alert.alert_type|replace('_', ' ')|title }} · {{ alert.summary }}</small></td>
                 <td data-label="Severity / confidence"><span class="severity-badge {{ alert.severity|lower }}">{{ alert.severity|title }}</span><small>{{ finding.confidence|title if finding else 'Unknown' }} confidence</small></td>
                 <td data-label="Device / CVE">
                   {% if alert.device %}<a href="{{ url_for('pages.device_detail', device_id=alert.device.id) }}">{{ alert.device.name }}</a>{% else %}Unknown device{% endif %}
@@ -45,11 +60,11 @@
                 </td>
                 <td data-label="Detected">{{ alert.created_at.strftime('%Y-%m-%d %H:%M UTC') if alert.created_at else '—' }}</td>
                 <td data-label="Status / action">
-                  <span class="status-tag {{ 'status-warning' if alert.status == 'open' else 'status-info' }}">{{ alert.status|title }}</span>
-                  {% if alert.status != 'resolved' %}
+                  <span class="status-tag {{ 'status-warning' if alert.status == 'open' else 'status-info' }}">{{ alert.status|replace('_', ' ')|title }}</span>
+                  {% if current_user.is_admin and alert.status in ('open', 'acknowledged') %}
                     <form method="post" action="{{ url_for('pages.toggle_alert_acknowledgement', alert_id=alert.id) }}">
                       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                      <button type="submit" class="button secondary alert-action">{{ 'Mark unread' if alert.status == 'acknowledged' else 'Acknowledge' }}</button>
+                      <button type="submit" class="button secondary alert-action">{{ 'Mark unread' if alert.status == 'acknowledged' else 'Acknowledge' if alert.status == 'open' else 'View details' }}</button>
                     </form>
                   {% endif %}
                 </td>

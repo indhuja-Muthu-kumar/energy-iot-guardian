@@ -3,7 +3,7 @@ from __future__ import annotations
 from flask import Blueprint, jsonify
 from flask_login import login_required
 
-from app.models.kev import KEVEntry
+from app.models.kev import CISA_KEV_SOURCE, KEVEntry
 
 api_kev_bp = Blueprint("api_kev", __name__)
 
@@ -11,7 +11,12 @@ api_kev_bp = Blueprint("api_kev", __name__)
 @api_kev_bp.get("")
 @login_required
 def list_kev():
-    entries = KEVEntry.query.order_by(KEVEntry.created_at.desc()).limit(50).all()
+    entries = (
+        KEVEntry.query.filter_by(source=CISA_KEV_SOURCE)
+        .order_by(KEVEntry.created_at.desc())
+        .limit(50)
+        .all()
+    )
     return jsonify({"items": [{
         "id": entry.id,
         "cve_id": entry.cve_id,

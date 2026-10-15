@@ -1,13 +1,19 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from sqlalchemy import func
 from sqlalchemy.orm import joinedload
 
 from app.extensions import db
+from app.models.alert import SecurityAlert
 from app.models.cve import CVE
 from app.models.device import ARCHIVED_DEVICE_STATUS, Device
 from app.models.finding import Finding
+from app.models.patch import PatchCandidate
 from app.models.scan import Scan
+from app.models.sync_log import SyncLog
+from app.models.telemetry import TelemetryReading
 from app.services.matcher import assess_cpe_match
 
 SEVERITIES = ("critical", "high", "medium", "low")
@@ -70,6 +76,8 @@ def build_vulnerability_summary(include_device_summaries: bool = False) -> dict:
         db.session.query(
             Scan.device_id,
             Scan.scan_type,
+            Finding.component_name,
+            Finding.matched_by,
             Finding.cve_id,
             Finding.match_status,
             CVE.severity,
@@ -90,6 +98,8 @@ def build_vulnerability_summary(include_device_summaries: bool = False) -> dict:
     for (
         device_id,
         scan_type,
+        finding_component_name,
+        matched_by,
         cve_id,
         finding_match_status,
         cve_severity,
@@ -98,6 +108,15 @@ def build_vulnerability_summary(include_device_summaries: bool = False) -> dict:
     ) in rows:
         if scan_type == "components":
             if finding_match_status == "not_applicable":
+                continue
+            evaluated = finding_match_status == "affected"
+        elif (
+            finding_component_name
+            and finding_component_name != device.model
+            and isinstance(matched_by, str)
+            and matched_by.startswith("nvd-cpe")
+        ):
+            if finding_match_status in {"not_affected", "not_applicable"}:
                 continue
             evaluated = finding_match_status == "affected"
         else:
@@ -200,3 +219,128 @@ def build_dashboard_panels(recent_limit: int = 6) -> dict:
         "trend_points": trend_points,
         "devices": devices,
     }
+
+
+def build_recent_activity(limit: int = 6) -> list[dict]:
+    events = []
+
+    def add_event(
+        *,
+        kind: str,
+        record_id: int,
+        title: str,
+        detail: str,
+        status: str,
+        timestamp: datetime | None,
+        device_id: int | None = None,
+    ) -> None:
+        events.append({
+            "kind": kind,
+            "record_id": record_id,
+            "title": title,
+            "detail": detail,
+            "status": status,
+            "timestamp": timestamp,
+            "device_id": device_id,
+        })
+
+    for scan in (
+        Scan.query.options(joinedload(Scan.device))
+        .order_by(Scan.created_at.desc(), Scan.id.desc())
+        .limit(limit)
+    ):
+        device_name = scan.device.name if scan.device else "Unknown device"
+        add_event(
+            kind="scan",
+            record_id=scan.id,
+            title=f"{scan.scan_type.replace('_', ' ').title()} scan",
+            detail=f"{device_name} · scan #{scan.id}",
+            status=scan.status,
+            timestamp=scan.completed_at or scan.created_at or scan.started_at,
+            device_id=scan.device_id,
+        )
+
+    for sync in (
+        SyncLog.query.filter(SyncLog.source.in_(("nvd", "kev")))
+        .order_by(SyncLog.started_at.desc(), SyncLog.id.desc())
+        .limit(limit)
+    ):
+        source_name = "CISA KEV" if sync.source == "kev" else "NVD CVE"
+        detail = (
+            f"{sync.records_processed or 0} records processed"
+            if sync.status == "success"
+            else "No successful update recorded"
+        )
+        add_event(
+            kind="sync",
+            record_id=sync.id,
+            title=f"{source_name} sync",
+            detail=detail,
+            status=sync.status,
+            timestamp=sync.completed_at or sync.started_at,
+        )
+
+    for reading in (
+        TelemetryReading.query.options(joinedload(TelemetryReading.device))
+        .order_by(TelemetryReading.received_at.desc(), TelemetryReading.id.desc())
+        .limit(limit)
+    ):
+        device_name = reading.device.name if reading.device else "Unknown device"
+        simulated = reading.telemetry_status.upper() == "SIMULATED"
+        add_event(
+            kind="telemetry",
+            record_id=reading.id,
+            title="Simulated telemetry received" if simulated else "Telemetry received",
+            detail=(
+                f"{device_name} · {reading.ingest_source.replace('_', ' ').title()}"
+            ),
+            status=reading.telemetry_status,
+            timestamp=reading.received_at,
+            device_id=reading.device_id,
+        )
+
+    for alert in (
+        SecurityAlert.query.options(joinedload(SecurityAlert.device))
+        .order_by(SecurityAlert.created_at.desc(), SecurityAlert.id.desc())
+        .limit(limit)
+    ):
+        device_name = alert.device.name if alert.device else "Unknown device"
+        detail = f"{alert.severity.title()} · {device_name}"
+        if alert.cve_id:
+            detail = f"{detail} · {alert.cve_id}"
+        add_event(
+            kind="alert",
+            record_id=alert.id,
+            title=alert.title,
+            detail=detail,
+            status=alert.status,
+            timestamp=alert.created_at,
+            device_id=alert.device_id,
+        )
+
+    for candidate in (
+        PatchCandidate.query.options(joinedload(PatchCandidate.device))
+        .order_by(
+            PatchCandidate.updated_at.desc(),
+            PatchCandidate.id.desc(),
+        )
+        .limit(limit)
+    ):
+        device_name = candidate.device.name if candidate.device else "Unknown device"
+        simulation_label = "SIMULATED" if candidate.is_simulated else "Recorded candidate"
+        cve_label = f" · {candidate.cve_id}" if candidate.cve_id else ""
+        add_event(
+            kind="remediation",
+            record_id=candidate.id,
+            title=f"{simulation_label} remediation",
+            detail=f"{device_name} · {candidate.component_name}{cve_label}",
+            status=candidate.status,
+            timestamp=candidate.updated_at or candidate.created_at,
+            device_id=candidate.device_id,
+        )
+
+    events.sort(
+        key=lambda event: event["timestamp"] or datetime.min,
+        reverse=True,
+    )
+    return events[:limit]

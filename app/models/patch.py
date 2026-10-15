@@ -61,5 +61,6 @@ class PatchCandidate(db.Model):
         self.verified_by = verifier
         self.verified_at = datetime.now(UTC).replace(tzinfo=None)
         self.verification_note = note or (
-            "Simulated verification passed. This record is a labeled demo workflow, not a real-world patch validation."
+            "Simulated verification passed. This is a labeled demo workflow, "
+            "not a real-world patch validation."
         )

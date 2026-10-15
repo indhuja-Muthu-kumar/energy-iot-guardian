@@ -25,6 +25,7 @@ def make_app():
         db.create_all()
         device = Device(
             name="SolarGuard-01",
+            telemetry_device_id="SolarGuard-01",
             vendor="SMA Solar Technology",
             model="Sunny Boy TL-21",
             firmware="unknown",
@@ -54,7 +55,9 @@ class FakeNVDClient:
                                     "cvssData": {
                                         "baseScore": 9.1,
                                         "baseSeverity": "CRITICAL",
-                                        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+                                        "vectorString": (
+                                            "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+                                        ),
                                         "attackVector": "NETWORK",
                                     }
                                 }
@@ -75,7 +78,9 @@ class FakeNVDClient:
                                     "cvssData": {
                                         "baseScore": 7.5,
                                         "baseSeverity": "HIGH",
-                                        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:N",
+                                        "vectorString": (
+                                            "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:N"
+                                        ),
                                         "attackVector": "NETWORK",
                                     }
                                 }
