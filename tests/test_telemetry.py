@@ -322,6 +322,61 @@ def test_uptime_fallback_persists_provenance_and_api_message_id():
     assert response.json["latest"]["source_uptime_ms"] == 45678
 
 
+@pytest.mark.parametrize(
+    ("age_seconds", "expected_state", "expected_connectivity"),
+    [
+        (0, "connected", "online"),
+        (30, "stale", "offline"),
+    ],
+)
+def test_telemetry_api_distinguishes_fresh_and_stale_readings(
+    age_seconds,
+    expected_state,
+    expected_connectivity,
+):
+    app = make_app()
+    client = app.test_client()
+    with client.session_transaction() as session:
+        session["_user_id"] = str(app.telemetry_user_id)
+        session["_fresh"] = True
+
+    with app.app_context():
+        device = db.session.get(Device, app.telemetry_device_id)
+        now = datetime.now(UTC).replace(tzinfo=None)
+        add_reading(
+            device.id,
+            received_at=now - timedelta(seconds=age_seconds),
+            timestamp=now - timedelta(seconds=age_seconds),
+        )
+
+    response = client.get("/api/dashboard/telemetry")
+
+    assert response.status_code == 200
+    assert response.json["state"] == expected_state
+    assert response.json["connectivity_status"] == expected_connectivity
+    assert response.json["latest"]["received_at"]
+
+
+def test_telemetry_api_reports_empty_state_and_requires_login():
+    app = make_app()
+    client = app.test_client()
+
+    unauthenticated = client.get("/api/dashboard/telemetry")
+
+    assert unauthenticated.status_code == 302
+    assert unauthenticated.headers["Location"].startswith("/auth/login?")
+
+    with client.session_transaction() as session:
+        session["_user_id"] = str(app.telemetry_user_id)
+        session["_fresh"] = True
+    empty = client.get("/api/dashboard/telemetry")
+
+    assert empty.status_code == 200
+    assert empty.json["state"] == "waiting"
+    assert empty.json["history"] == []
+    assert empty.json["message"]
+
+
 def test_demo_threshold_alert_is_persisted_and_repeated_events_are_grouped():
     app = make_app()
     with app.app_context():
@@ -1036,8 +1091,25 @@ def test_component_scan_persists_unassessed_components_and_displays_scan_evidenc
             FakeComponentNVD([]),
         )
         assert scan.status == "completed"
+        assert scan.summary.startswith(
+            "Inverter firmware: Cannot determine: firmware version not reported."
+        )
         assert scan.findings == []
         evidence = json.loads(scan.notes)
+        assert evidence["source"] == "NVD"
+        assert evidence["source_urls"] == [
+            "https://services.nvd.nist.gov/rest/json/cves/2.0",
+            "https://services.nvd.nist.gov/rest/json/cpes/2.0",
+        ]
+        assert {item["component"] for item in evidence["queries"]} == {
+            "ESP-IDF",
+            "Arduino ESP32 core",
+        }
+        assert {
+            item["query_type"] for item in evidence["queries"]
+        } == {"cpe_product_search", "keyword"}
+        assert evidence["requested_at"].endswith("+00:00")
+        assert evidence["retrieved_at"].endswith("+00:00")
         assert evidence["device"]["firmware_version"] is None
         idf_state = next(
             item for item in evidence["components"] if item["component"] == "ESP-IDF"

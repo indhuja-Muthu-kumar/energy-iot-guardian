@@ -350,6 +350,11 @@ def run_scan_for_device(
 
     try:
         nvd = client or NVDClient()
+        source_url = getattr(
+            nvd,
+            "base_url",
+            current_app.config["NVD_API_BASE"],
+        )
         queries: list[tuple[str, object, str | None, str | None]] = [
             (
                 f"{device.vendor} {device.model}".strip(),
@@ -403,6 +408,27 @@ def run_scan_for_device(
                 "evidence_source": component.evidence_source,
                 "evidence_note": component.evidence_note,
             })
+
+        query_evidence = [
+            {
+                "query": query,
+                "query_type": (
+                    "cpe" if query.startswith("cpe:2.3:") else "keyword"
+                ),
+                "component": component_name,
+            }
+            for query, _target, component_name, _component_version in queries
+        ]
+        scan.notes = json.dumps(
+            {
+                "source": "NVD",
+                "source_urls": [source_url],
+                "queries": query_evidence,
+                "requested_at": scan.started_at.replace(tzinfo=UTC).isoformat(),
+            },
+            sort_keys=True,
+        )
+        db.session.commit()
 
         affected_count = 0
         potential_count = 0
@@ -577,8 +603,23 @@ def run_scan_for_device(
             commit=False,
         )
 
+        firmware_status = (
+            device.firmware_verification_status or "UNKNOWN"
+        ).upper()
+        if not device.firmware_version:
+            firmware_assessment_note = (
+                "Cannot determine: firmware version not reported. "
+            )
+        elif firmware_status != "VERIFIED":
+            firmware_assessment_note = (
+                "Cannot determine: firmware version is not verified. "
+            )
+        else:
+            firmware_assessment_note = ""
+
         scan.status = "completed"
         scan.summary = (
+            f"{firmware_assessment_note}"
             f"NVD returned {queried_entries} CVE entries; "
             f"{affected_count} matched the evaluated NVD CPE/version logic and "
             f"{potential_count} remain potential matches; "
@@ -590,8 +631,10 @@ def run_scan_for_device(
             f"{recommendation_count} source-backed vendor advisory recommendation(s) "
             "require review."
         )
+        scan.completed_at = datetime.now(UTC).replace(tzinfo=None)
         scan.notes = json.dumps(
             {
+                "source": "NVD",
                 "device": {
                     "name": device.name,
                     "vendor": device.vendor,
@@ -605,17 +648,17 @@ def run_scan_for_device(
                     "site": device.site,
                 },
                 "components": component_states,
+                "queries": query_evidence,
+                "requested_at": scan.started_at.replace(tzinfo=UTC).isoformat(),
+                "retrieved_at": scan.completed_at.replace(tzinfo=UTC).isoformat(),
                 "recommendation_note": (
                     "NVD-tagged vendor advisory references are review leads; "
                     "the advisory content and fixed version are not asserted."
                 ),
-                "source_urls": [
-                    "https://nvd.nist.gov/vuln/search",
-                ],
+                "source_urls": [source_url],
             },
             sort_keys=True,
         )
-        scan.completed_at = datetime.now(UTC).replace(tzinfo=None)
         db.session.commit()
     except Exception as error:
         logger.exception("NVD scan failed for device %s", device.id)

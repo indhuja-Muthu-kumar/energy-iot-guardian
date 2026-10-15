@@ -1,12 +1,22 @@
 .venv/
+venv/
+env/
 __pycache__/
 .pytest_cache/
+.ruff_cache/
 .env
 .env.*
 !.env.example
 *.py[cod]
-instance/*.db
-instance/*.sqlite
+instance/
+*.db
+*.sqlite
+*.sqlite3
+*.log
+logs/
+*.bak
+*.backup
+backups/
 .pio/build/
 .vscode/
 

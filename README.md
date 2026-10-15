@@ -1,77 +1,96 @@
 # Energy-IoT CVE Monitor
 
-This project is a Flask web application for tracking energy and industrial IoT assets, correlating firmware versions to CVEs, and surfacing known exploited vulnerabilities from CISA KEV.
+A small Flask dashboard for **simulated** energy-IoT telemetry. A Wokwi ESP32
+sketch publishes sample readings through MQTT; a separately started Flask
+worker validates and stores them in SQLite; authenticated pages show saved
+readings and inventory. Optional NVD scans report source-backed matches and
+candidates. This project does not monitor physical equipment or prove that a
+device is secure.
 
-## Windows setup and startup
+## Feature status
 
-The app defaults to SQLite in Flask's `instance` directory and does not require
-MySQL. The MySQL steps below are optional; use them only if you intentionally
-configure a MySQL `DATABASE_URL`. Keep the existing SQLite file when it is your
-active database.
+| Feature | Status |
+| --- | --- |
+| Login, inventory, telemetry validation/storage, dashboard API | Covered by local automated tests |
+| MQTT broker and Wokwi delivery | Historical Wokwi-labelled records exist; a fresh end-to-end run was not verified in this session |
+| Dashboard recovery states | Fixed and tested locally; authenticated browser use still needs manual verification |
+| NVD component scan | Experimental; one live NVD scan completed on a copied DB and returned candidates, not confirmed SolarGuard vulnerabilities |
+| SMA firmware reference | Separate reference-only inventory data; never SolarGuard-installed firmware |
+| Physical monitoring or automatic patching | Not provided |
 
-The local Windows setup uses a MySQL 8 server running on `127.0.0.1:3306`.
-Start the MySQL80 Windows service from an elevated PowerShell prompt if it is not
-already running:
+## Architecture
 
-```powershell
-Start-Service MySQL80
+```text
+Wokwi ESP32 (SIMULATED)
+        | MQTT telemetry
+        v
+Public broker (test.mosquitto.org)
+        |
+        v
+One explicitly started Flask worker
+        | validate -> commit -> application ACK
+        v
+SQLite -> authenticated Flask API/pages -> dashboard
 ```
 
-Create the application database and a least-privilege local user. Replace the
-example password with a strong password and use the same value in `.env`:
+The default MQTT broker is public and unauthenticated. Other clients may read
+or publish on the topic. Never publish secrets or personal information. A
+`stored` acknowledgement confirms that the backend committed the message;
+MQTT `publish()` success alone does not prove receipt or persistence.
+
+## Windows setup
+
+Prerequisites: Git and Python 3.11 or newer. From PowerShell:
 
 ```powershell
-mysql -u root -p
-```
-
-At the MySQL prompt, run:
-
-```sql
-CREATE DATABASE energy_iot_cve_monitor
-  CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-CREATE USER 'appuser'@'localhost' IDENTIFIED BY 'replace-with-a-strong-password';
-GRANT SELECT, INSERT, UPDATE, DELETE
-  ON energy_iot_cve_monitor.* TO 'appuser'@'localhost';
-FLUSH PRIVILEGES;
-EXIT;
-```
-
-Then, from the project directory in PowerShell:
-
-```powershell
-py -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-python -m pip install -r requirements-dev.txt
+git clone https://github.com/indhuja-Muthu-kumar/energy-iot-guardian.git
+Set-Location 'energy-iot-guardian'
+py -3.11 -m venv .venv
+& '.venv\Scripts\python.exe' -m pip install -r requirements-dev.txt
 Copy-Item .env.example .env
+$secret = & '.venv\Scripts\python.exe' -c "import secrets; print(secrets.token_hex(32))"
+Write-Output "Set SECRET_KEY in .env to: $secret"
 notepad .env
 ```
 
-Set `SECRET_KEY` to a new random value and set:
+Set `SECRET_KEY` to the generated value and keep `FLASK_ENV=development`.
+Leaving `DATABASE_URL` unset uses SQLite under
+`instance\energy_iot_cve_monitor.db`. `NVD_API_KEY` is optional. Do not commit
+`.env`.
 
-```dotenv
-DATABASE_URL=mysql+pymysql://appuser:replace-with-a-strong-password@127.0.0.1:3306/energy_iot_cve_monitor
-FLASK_ENV=development
-```
-
-Generate a key with `python -c "import secrets; print(secrets.token_hex(32))"`
-and replace the example `SECRET_KEY` value with the output.
-
-If the database password contains URL-reserved characters, percent-encode them
-in `DATABASE_URL`. Save `.env`, then initialize and start the application:
+For a **new clone only**, initialize the database and create demo inventory:
 
 ```powershell
-flask --app app init-db
-flask --app app create-admin
-flask --app app seed-demo-device
-flask --app app sync-kev
-flask --app app run --debug
+& '.venv\Scripts\python.exe' -m flask --app app init-db
+& '.venv\Scripts\python.exe' -m flask --app app setup-wokwi-device
+& '.venv\Scripts\python.exe' -m flask --app app setup-sma-reference-device
+& '.venv\Scripts\python.exe' -m flask --app app create-admin
 ```
 
-`sync-kev` requires outbound HTTPS access to CISA. Visit `http://localhost:5000`
-and sign in with the administrator credentials created by the CLI. The app also
-supports SQLite by default when `DATABASE_URL` is omitted, but MySQL is the
-documented local setup.
+`create-admin` prompts for a password without displaying it. For an existing
+database, make a separate backup before running `init-db`; it applies additive
+schema updates and does not replace the database file. Review migrations
+before applying them to important data.
+
+## Start the app and MQTT worker
+
+Open two PowerShell windows in the project folder. Start **only one** worker;
+it uses a single-instance lock.
+
+```powershell
+# Window 1 — MQTT subscriber
+& '.venv\Scripts\python.exe' -m flask --app app telemetry-worker
+```
+
+```powershell
+# Window 2 — local website
+& '.venv\Scripts\python.exe' -m flask --app app run --host 127.0.0.1 --port 5001
+```
+
+Open `http://127.0.0.1:5001/auth/login`, sign in with the admin account you
+created, then visit `http://127.0.0.1:5001/dashboard`. The worker log should
+report a broker connection and subscription. The web process does not start
+the subscriber automatically.
 
 When upgrading an existing database after pulling a schema update, first make
 a backup, then run `flask --app app init-db`. This additive, idempotent command
@@ -203,22 +222,21 @@ Run the subscriber and web app in two separate PowerShell windows:
 
 ```powershell
 # Window 2: authenticated website
-.\.venv\Scripts\python.exe -m flask --app app run --debug
+.\.venv\Scripts\python.exe -m flask --app app run --host 127.0.0.1 --port 5001
 ```
 
-Start the Wokwi simulation. The dashboard's authenticated telemetry endpoint
-shows “Waiting for telemetry” before the first message, updates metrics and
-history from database-stored messages, and labels readings “Stale” after ten
-seconds without a new message. The subscriber runs only when explicitly
-started, so Flask's debug reloader and tests do not create duplicate
-subscribers. The default broker and topic now match between the ESP32, Flask
-worker, and standalone listener. The worker logs the subscription request and
-broker acknowledgement; an ESP32 `publish()` success only means its local
-MQTT client accepted the packet and does not prove that a subscriber received
-it. Device ID, asset labels, and `SIMULATED` status are validated
-before storage; duplicate message IDs are ignored. Archived device history
-remains in the database and can still be viewed, but archived devices cannot
-receive live readings or be scanned.
+Start the Wokwi simulation. The dashboard starts in a loading state, then
+distinguishes an empty database, fresh readings, stale readings, an expired
+login session, and backend errors. Readings are marked stale/offline after
+10 seconds without a new message (`TELEMETRY_STALE_AFTER_SECONDS` in
+`app/config.py`). Temporary service errors retain the last saved values and
+retry with backoff. The worker runs only when explicitly started. The worker
+logs its subscription request and broker acknowledgement; an ESP32
+`publish()` success only means its local MQTT client accepted the packet.
+Device ID, simulated asset labels, and `SIMULATED` status are validated before
+storage; duplicate message IDs do not create a second reading. Archived device
+history remains in the database, but archived devices cannot receive live
+readings or be scanned.
 
 #### Application-level storage acknowledgement
 
@@ -235,11 +253,12 @@ eight-second acknowledgement timeout and capped retry backoff.
 
 The worker sends its acknowledgement only after validation and the database
 transaction succeeds. The versioned response includes event type, message ID,
-device ID, outcome (`stored`, `rejected`, or `retry`), reason, duplicate flag
-and server processing time. A repeated already-committed event is acknowledged
-as stored but is not inserted again. A database failure produces a `retry`
-outcome, never a storage confirmation. A rejection is terminal for that event;
-inspect its reason before correcting the sketch or server.
+device ID, worker ID, outcome (`stored`, `rejected`, or `error`), reason,
+duplicate flag, and server processing time. A repeated already-committed event
+is acknowledged as `stored` with `duplicate: true`; it is not inserted again.
+A database failure produces `error`, never a storage confirmation. A rejection
+is terminal for that event; inspect its reason before correcting the sketch or
+server.
 
 An MQTT publish result only tells the local MQTT client whether it accepted a
 packet; it does not prove that the subscriber received it. The application
@@ -422,9 +441,12 @@ catalog evidence, not proof of current status.
 From PowerShell in the project directory, run:
 
 ```powershell
-.\.venv\Scripts\pytest.exe -q
+.\.venv\Scripts\python.exe -m pytest -p no:cov -o addopts= -q --disable-warnings
 .\.venv\Scripts\ruff.exe check app tests
 ```
+
+At the time of this README update, the full test command reported 245 passed,
+one warning, and no failures. The exact count changes when tests are added.
 
 The default database is SQLite and resolves under Flask's `instance` directory.
 Keep the existing database file when upgrading; `flask --app app init-db`
@@ -437,11 +459,24 @@ server to the internet.
 
 ## Security notes
 
-- No secret values are committed to the repository.
+- The current `.env.example` contains placeholders only. An older version in
+  Git history contains a credential-shaped database URL; if you ever used that
+  value as a real password, rotate it. Git history was not rewritten.
 - The app relies on Flask-Login, CSRF protection, and safe session cookies.
 - The app never claims a device is secure based on no matches alone; it phrases
   results as “No known matches found in the data sources checked at this time.”
 
-# energy-iot-guardian
+## Five-minute judge demo
 
-IoT-based energy monitoring and CVE vulnerability detection.
+1. Sign in to `http://127.0.0.1:5001/dashboard`.
+2. Start the Wokwi simulation at
+   <https://wokwi.com/projects/477868883321291777>.
+3. Show the same message ID in the Serial Monitor, worker log, and dashboard.
+   A `stored` ACK is the backend commit confirmation. If any part is
+   unavailable, say so; do not present a local sample as Wokwi delivery.
+4. Open the device inventory and explain that SolarGuard-01 is a simulated
+   ESP32 board. Arduino-ESP32 and ESP-IDF are gateway runtime values, not
+   inverter firmware; represented inverter firmware is unknown.
+5. If a component scan is available, explain that NVD results can be potential
+   candidates or unassessed components. No matches do not prove security, and
+   this application does not patch devices.

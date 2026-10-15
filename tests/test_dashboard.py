@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 from app import create_app
 from app.extensions import db
@@ -338,6 +339,39 @@ def test_dashboard_includes_clearly_labeled_simulated_telemetry():
     assert "Voltage" in html
 
 
+def test_dashboard_has_distinct_telemetry_loading_and_recovery_states():
+    app = make_dashboard_app()
+    client = app.test_client()
+    authenticate(client, app.dashboard_user_id)
+
+    response = client.get("/dashboard")
+    html = response.get_data(as_text=True)
+    script = (
+        Path(__file__).resolve().parents[1]
+        / "app"
+        / "static"
+        / "js"
+        / "dashboard.js"
+    ).read_text(encoding="utf-8")
+
+    assert response.status_code == 200
+    assert "Loading telemetry…" in html
+    assert 'data-stale-after-seconds="10"' in html
+    assert 'data-telemetry-age' in html
+    assert 'data-telemetry-error role="status" hidden' in html
+    assert 'data-telemetry-session hidden' in html
+    assert 'href="/auth/login?next=/dashboard"' in html
+    assert "No telemetry received yet." in script
+    assert "response.status === 401" in script
+    assert "Telemetry API returned HTTP ${response.status}." in script
+    assert "Last known: ${lastKnownStatus}" in script
+    assert "window.setTimeout(pollTelemetry, nextDelay)" in script
+    assert "Math.min(retryDelayMs * 2, 30000)" in script
+    assert "Stale · SIMULATED · last reading is ${age}" in script
+    assert "Stale reading · last known ${lastKnownStatus}" in script
+    assert "renderWaiting(\"Telemetry service unavailable; retrying…\")" not in script
+
+
 def test_dashboard_distinguishes_kev_last_success_from_failed_latest_attempt():
     app = make_dashboard_app()
     now = datetime.now(UTC).replace(tzinfo=None)
@@ -372,8 +406,8 @@ def test_dashboard_distinguishes_kev_last_success_from_failed_latest_attempt():
     assert "last success" in html
     assert "Current" in html
     assert "Calculated power" in html
-    assert "Demo status" in html
-    assert "Waiting for telemetry" in html
+    assert "Telemetry status" in html
+    assert "Loading telemetry…" in html
     assert "Recent simulated readings" in html
     assert "Updates every 3 seconds" in html
     assert "Potential / indeterminate latest-scan matches" in html
